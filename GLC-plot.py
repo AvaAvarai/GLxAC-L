@@ -73,17 +73,32 @@ except Exception as e:
     exit()
 
 # Generate unique colors for each class
-def generate_colors(n_classes):
-    """Generate unique colors for each class."""
-    # Use a colormap to generate distinct colors
-    cmap = plt.cm.tab10 if n_classes <= 10 else plt.cm.tab20
-    colors = [cmap(i) for i in range(n_classes)]
+def generate_colors(unique_classes):
+    """Generate unique colors for each class with special handling for benign/malignant."""
+    n_classes = len(unique_classes)
+    colors = []
+    
+    for i, class_label in enumerate(unique_classes):
+        class_lower = str(class_label).lower()
+        
+        # Special colors for medical classes
+        if class_lower == 'benign':
+            colors.append('green')
+        elif class_lower == 'malignant':
+            colors.append('red')
+        else:
+            # Use colormap for other classes - properly scale by number of classes
+            cmap = plt.cm.viridis  # Use a continuous colormap
+            # Scale the color index to [0, 1] range based on total number of classes
+            color_index = i / (n_classes - 1) if n_classes > 1 else 0
+            colors.append(cmap(color_index))
+    
     return colors
 
 # Get unique classes and generate colors
 unique_classes = np.unique(y)
 n_classes = len(unique_classes)
-colors = generate_colors(n_classes)
+colors = generate_colors(unique_classes)
 
 # Create a mapping from class labels to indices for color selection
 class_to_index = {cls: idx for idx, cls in enumerate(unique_classes)}
@@ -124,21 +139,71 @@ def glxac_l_encoding(x):
 fig, axes = plt.subplots(1, 2, figsize=(12, 6))
 titles = ['GLC-L (Length Encoding)', 'GL×AC-L (Angle Encoding)']
 
-for idx, encoding_func in enumerate([glc_l_encoding, glxac_l_encoding]):
-    ax = axes[idx]
+def plot_with_overlap_detection(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes):
+    """Plot paths with thickened overlapping segments."""
+    # Store all segments for overlap detection
+    all_segments = []
+    
+    # First pass: collect all segments
     for class_label in unique_classes:
-        X_class = X_norm_sorted[y == class_label]
+        X_class = X_data[y_data == class_label]
         color_idx = class_to_index[class_label]
         for row in X_class[:10]:  # Plot first 10 samples per class for clarity
             path = encoding_func(row)
-            ax.plot(path[:, 0], path[:, 1], alpha=0.6, color=colors[color_idx], label=class_label if row is X_class[0] else "")
+            for i in range(len(path) - 1):
+                segment = {
+                    'start': path[i],
+                    'end': path[i + 1],
+                    'color': colors[color_idx],
+                    'class_label': class_label,
+                    'linewidth': 1.0,
+                    'alpha': 0.6
+                }
+                all_segments.append(segment)
+    
+    # Second pass: detect overlaps and adjust linewidth
+    for i, seg1 in enumerate(all_segments):
+        overlap_count = 1  # Start with 1 for the segment itself
+        
+        for j, seg2 in enumerate(all_segments):
+            if i != j:
+                # Check if segments overlap (simplified overlap detection)
+                # Calculate distance between segment midpoints
+                mid1 = (seg1['start'] + seg1['end']) / 2
+                mid2 = (seg2['start'] + seg2['end']) / 2
+                distance = np.linalg.norm(mid1 - mid2)
+                
+                # If segments are very close, consider them overlapping
+                if distance < 0.05:  # Threshold for overlap detection
+                    overlap_count += 1
+        
+        # Adjust linewidth based on overlap count
+        seg1['linewidth'] = min(1.0 + (overlap_count - 1) * 0.5, 5.0)  # Cap at 5.0
+    
+    # Third pass: plot all segments with adjusted linewidths
+    for segment in all_segments:
+        ax.plot([segment['start'][0], segment['end'][0]], 
+                [segment['start'][1], segment['end'][1]], 
+                color=segment['color'], 
+                linewidth=segment['linewidth'],
+                alpha=segment['alpha'])
+
+# Create legend handles for all classes
+legend_handles = []
+for i, class_label in enumerate(unique_classes):
+    color_idx = class_to_index[class_label]
+    handle = plt.Line2D([], [], color=colors[color_idx], linewidth=2, label=str(class_label))
+    legend_handles.append(handle)
+
+for idx, encoding_func in enumerate([glc_l_encoding, glxac_l_encoding]):
+    ax = axes[idx]
+    plot_with_overlap_detection(ax, encoding_func, X_norm_sorted, y, colors, class_to_index, unique_classes)
     ax.set_title(titles[idx] + "\n(Features sorted by LDA importance)")
     ax.axis('equal')
     ax.grid(True)
-    # Add legend to show class labels
-    handles, labels = ax.get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    ax.legend(by_label.values(), by_label.keys(), loc='upper right')
+
+# Add single legend to the figure (not individual subplots)
+fig.legend(handles=legend_handles, loc='upper right', bbox_to_anchor=(0.98, 0.98))
 
 plt.suptitle(f"CSV Data Visualization in Two Encoding Schemes\n(Features sorted by LDA importance, {n_classes} classes)")
 plt.tight_layout()
