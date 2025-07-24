@@ -151,69 +151,77 @@ def glc_l_encoding(x):
     
     return np.cumsum(glc_vectors, axis=0)
 
-def glxac_l_encoding(x):
-    """GLCxA-L: cumsum(k_i * q_i) where k_i are LDA coefficients, q_i = arccos(|x_i|)"""
-    # Get LDA coefficients in decreasing order
-    k_i = lda_importance  # Already sorted in decreasing order from earlier
-    
-    # x_i are already min-max normalized from earlier preprocessing
-    # Calculate q_i = arccos(|x_i|)
-    q_i = np.arccos(np.abs(x))
-    
-    # Calculate k_i * q_i for each feature
-    kq_vectors = []
-    for i in range(n_features):
-        # Create a unit vector in the direction of the LDA coefficient
-        # Use the angle from the original angles array (0 to 90 degrees)
-        angle = angles[i]  # This is the fixed angle for feature i
-        # Scale by k_i * q_i
-        magnitude = k_i[i] * q_i[i]
-        vector = [magnitude * np.cos(angle), magnitude * np.sin(angle)]
-        kq_vectors.append(vector)
-    
-    return np.cumsum(kq_vectors, axis=0)
-
 def find_optimal_separation_and_accuracy(final_endpoints, unique_classes):
-    """Find optimal separation point on U-axis and calculate classification accuracy."""
-    # Extract x-coordinates (U-axis positions) and class labels - vectorized
+    """Find optimal separation point on U-axis and calculate classification accuracy (dominant side per class)."""
     u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
     class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
     
     # Find optimal separation point
     if len(unique_classes) == 2:
-        # Binary case: vectorized operations
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
-        
         threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
         
-        # Vectorized accuracy calculation
-        predictions = (u_positions >= threshold).astype(int)
-        true_labels = (class_labels == unique_classes[1]).astype(int)
-        accuracy = np.mean(predictions == true_labels)
+        # For each class, determine dominant side
+        first_class_side = np.mean(first_class_positions >= threshold) >= 0.5  # True if most are >= threshold
+        other_class_side = np.mean(other_class_positions >= threshold) >= 0.5
         
+        # Count correct for each class
+        correct_first = np.sum((first_class_positions >= threshold) == first_class_side)
+        correct_other = np.sum((other_class_positions >= threshold) == other_class_side)
+        total = len(first_class_positions) + len(other_class_positions)
+        accuracy = (correct_first + correct_other) / total
     else:
-        # Multi-class case: vectorized
         threshold = np.mean(u_positions)
-        
-        # Vectorized class means calculation
         class_means = {}
         for class_label in unique_classes:
             class_mask = (class_labels == class_label)
             if np.any(class_mask):
                 class_means[class_label] = np.mean(u_positions[class_mask])
-        
-        # Vectorized prediction
-        predictions = []
-        for pos in u_positions:
-            closest_class = min(class_means.keys(), 
-                              key=lambda c: abs(pos - class_means[c]))
-            predictions.append(closest_class)
-        
-        accuracy = np.mean(np.array(predictions) == class_labels)
-    
+        # For each class, determine dominant side (closest mean)
+        correct = 0
+        for i, pos in enumerate(u_positions):
+            label = class_labels[i]
+            # Find which side of threshold is dominant for this class
+            class_mask = (class_labels == label)
+            class_positions = u_positions[class_mask]
+            dominant_side = np.mean(class_positions >= threshold) >= 0.5
+            is_correct = (pos >= threshold) == dominant_side
+            correct += int(is_correct)
+        accuracy = correct / len(u_positions)
     return threshold, accuracy
+
+def optimize_glxac_l_scaling(X_data, y_data, unique_classes, class_to_index, colors):
+    """Find the optimal scaling factor h for GLxAC-L by maximizing classification accuracy."""
+    best_h = 1.0
+    best_acc = 0.0
+    h_values = np.linspace(0.01, 5.0, 500)  # Finer search range and more steps
+    for h in h_values:
+        def scaled_encoding(x):
+            return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(len(x))], axis=0)
+        # Collect endpoints
+        final_endpoints = []
+        for class_label in unique_classes:
+            X_class = X_data[y_data == class_label]
+            color_idx = class_to_index[class_label]
+            for row in X_class:
+                path = scaled_encoding(row)
+                final_endpoints.append((path[-1], colors[color_idx], class_label))
+        # Use existing accuracy function
+        _, acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+        if acc > best_acc:
+            best_acc = acc
+            best_h = h
+    return best_h, best_acc
+
+def glxac_l_encoding(x, h=1.0):
+    # x[i] in [0,1], angle = x[i] * 90 degrees = x[i] * (π/2) radians, scaled by h
+    return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(n_features)], axis=0)
+
+# Find optimal h for GLxAC-L
+best_h, best_acc = optimize_glxac_l_scaling(X_norm_sorted, y, unique_classes, class_to_index, colors)
+print(f'Optimal scaling factor for GLxAC-L: h={best_h:.3f} (accuracy={best_acc:.3f})')
 
 def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes):
     """Plot paths with shared U-axis, first class up, others down, with endpoint projections."""
@@ -247,7 +255,7 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
     # Batch plot first segments
     for i, path in enumerate(all_paths):
         ax.plot([0, path[0][0]], [0, path[0][1]], 
-               color=all_colors[i], linewidth=2, alpha=0.7, zorder=2)
+               color=all_colors[i], linewidth=0.5, alpha=0.7, zorder=2)
     
     # Collect all segments efficiently
     for i, path in enumerate(all_paths):
@@ -261,7 +269,7 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                 'end': path[j + 1],
                 'color': color,
                 'class_label': class_label,
-                'linewidth': 1.0,
+                'linewidth': 0.5,  # Extra thin by default
                 'alpha': 0.6
             }
             all_segments.append(segment)
@@ -293,7 +301,7 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                     overlap_count += np.sum((distances < 0.05) & (np.arange(len(distances)) != i))
                     
                     # Adjust linewidth based on overlap count
-                    seg1['linewidth'] = min(1.0 + (overlap_count - 1) * 0.5, 5.0)
+                    seg1['linewidth'] = min(0.5 + (overlap_count - 1) * 0.25, 2.0)  # Extra thin, cap at 2.0
     
     # Batch plot all segments
     for segment in all_segments:
@@ -332,7 +340,7 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
 
 # Plot side-by-side
 fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-titles = ['GLC-L (Length Encoding)', 'GL×AC-L (Angle Encoding)']
+titles = ['GLC-L (Length Encoding)', f'GL×AC-L (Angle Encoding, h={best_h:.2f})']
 
 # Create legend handles for all classes
 legend_handles = []
@@ -341,7 +349,7 @@ for i, class_label in enumerate(unique_classes):
     handle = plt.Line2D([], [], color=colors[color_idx], linewidth=2, label=str(class_label))
     legend_handles.append(handle)
 
-for idx, encoding_func in enumerate([glc_l_encoding, glxac_l_encoding]):
+for idx, encoding_func in enumerate([glc_l_encoding, lambda x: glxac_l_encoding(x, h=best_h)]):
     ax = axes[idx]
     plot_with_shared_u_axis(ax, encoding_func, X_norm_sorted, y, colors, class_to_index, unique_classes)
     ax.set_title(titles[idx] + "\n(Features sorted by LDA importance)")
