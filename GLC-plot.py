@@ -252,26 +252,33 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
             all_class_labels.append(class_label)
             all_y_directions.append(y_direction)
     
-    # Batch plot first segments
-    for i, path in enumerate(all_paths):
-        ax.plot([0, path[0][0]], [0, path[0][1]], 
-               color=all_colors[i], linewidth=0.5, alpha=0.7, zorder=2)
-    
-    # Collect all segments efficiently
+    # Collect all segments efficiently (including first segments)
     for i, path in enumerate(all_paths):
         class_label = all_class_labels[i]
         color = all_colors[i]
         
-        # Store segments for overlap detection
-        for j in range(len(path) - 1):
-            segment = {
-                'start': path[j],
-                'end': path[j + 1],
-                'color': color,
-                'class_label': class_label,
-                'linewidth': 0.5,  # Extra thin by default
-                'alpha': 0.6
-            }
+        # Store segments for overlap detection (including first segment from origin)
+        for j in range(len(path)):
+            if j == 0:
+                # First segment from origin to first point
+                segment = {
+                    'start': np.array([0, 0]),
+                    'end': path[j],
+                    'color': color,
+                    'class_label': class_label,
+                    'linewidth': 0.5,  # Extra thin by default
+                    'alpha': 0.6
+                }
+            else:
+                # Subsequent segments
+                segment = {
+                    'start': path[j-1],
+                    'end': path[j],
+                    'color': color,
+                    'class_label': class_label,
+                    'linewidth': 0.5,  # Extra thin by default
+                    'alpha': 0.6
+                }
             all_segments.append(segment)
         
         # Store final endpoint for projection
