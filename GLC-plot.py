@@ -151,55 +151,111 @@ def glc_l_encoding(x):
     
     return np.cumsum(glc_vectors, axis=0)
 
-def find_optimal_separation_and_accuracy(final_endpoints, unique_classes):
-    """Find optimal separation point on U-axis and calculate classification accuracy (dominant side per class)."""
+def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold=None):
+    """Find optimal separation point on U-axis and calculate classification accuracy."""
     u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
     class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
     
-    # Find optimal separation point
+    # Use custom threshold if provided, otherwise calculate optimal threshold
+    if custom_threshold is not None:
+        threshold = custom_threshold
+    else:
+        # Find optimal separation point
+        if len(unique_classes) == 2:
+            first_class_mask = (class_labels == unique_classes[0])
+            first_class_positions = u_positions[first_class_mask]
+            other_class_positions = u_positions[~first_class_mask]
+            threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+        else:
+            threshold = np.mean(u_positions)
+    
+    # Calculate accuracy properly
     if len(unique_classes) == 2:
+        # For binary classification: determine which class is on which side
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
-        threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
         
-        # For each class, determine dominant side
-        first_class_side = np.mean(first_class_positions >= threshold) >= 0.5  # True if most are >= threshold
-        other_class_side = np.mean(other_class_positions >= threshold) >= 0.5
+        # Determine which side each class is predominantly on
+        first_class_mean = np.mean(first_class_positions)
+        other_class_mean = np.mean(other_class_positions)
         
-        # Count correct for each class
-        correct_first = np.sum((first_class_positions >= threshold) == first_class_side)
-        correct_other = np.sum((other_class_positions >= threshold) == other_class_side)
-        total = len(first_class_positions) + len(other_class_positions)
-        accuracy = (correct_first + correct_other) / total
-    else:
-        threshold = np.mean(u_positions)
-        class_means = {}
-        for class_label in unique_classes:
-            class_mask = (class_labels == class_label)
-            if np.any(class_mask):
-                class_means[class_label] = np.mean(u_positions[class_mask])
-        # For each class, determine dominant side (closest mean)
+        # Assign classes to sides based on their means
+        if first_class_mean < other_class_mean:
+            # First class is on left side (below threshold)
+            predicted_left = unique_classes[0]
+            predicted_right = unique_classes[1]
+        else:
+            # First class is on right side (above threshold)
+            predicted_left = unique_classes[1]
+            predicted_right = unique_classes[0]
+        
+        # Count correct predictions
         correct = 0
         for i, pos in enumerate(u_positions):
-            label = class_labels[i]
-            # Find which side of threshold is dominant for this class
-            class_mask = (class_labels == label)
-            class_positions = u_positions[class_mask]
-            dominant_side = np.mean(class_positions >= threshold) >= 0.5
-            is_correct = (pos >= threshold) == dominant_side
-            correct += int(is_correct)
+            actual_class = class_labels[i]
+            if pos < threshold:
+                predicted_class = predicted_left
+            else:
+                predicted_class = predicted_right
+            
+            if actual_class == predicted_class:
+                correct += 1
+        
         accuracy = correct / len(u_positions)
+        
+    else:
+        # For multiclass: find the most common class on each side
+        left_mask = u_positions < threshold
+        right_mask = u_positions >= threshold
+        
+        # Find most common class on left side
+        if np.any(left_mask):
+            left_classes = class_labels[left_mask]
+            left_class_counts = {}
+            for cls in left_classes:
+                left_class_counts[cls] = left_class_counts.get(cls, 0) + 1
+            predicted_left = max(left_class_counts, key=left_class_counts.get)
+        else:
+            predicted_left = unique_classes[0]  # Default if no left side data
+        
+        # Find most common class on right side
+        if np.any(right_mask):
+            right_classes = class_labels[right_mask]
+            right_class_counts = {}
+            for cls in right_classes:
+                right_class_counts[cls] = right_class_counts.get(cls, 0) + 1
+            predicted_right = max(right_class_counts, key=right_class_counts.get)
+        else:
+            predicted_right = unique_classes[0]  # Default if no right side data
+        
+        # Count correct predictions
+        correct = 0
+        for i, pos in enumerate(u_positions):
+            actual_class = class_labels[i]
+            if pos < threshold:
+                predicted_class = predicted_left
+            else:
+                predicted_class = predicted_right
+            
+            if actual_class == predicted_class:
+                correct += 1
+        
+        accuracy = correct / len(u_positions)
+    
     return threshold, accuracy
 
 def optimize_glxac_l_scaling(X_data, y_data, unique_classes, class_to_index, colors):
-    """Find the optimal scaling factor h for GLxAC-L by maximizing classification accuracy."""
+    """Find the optimal scaling factor h and threshold for GLxAC-L by maximizing classification accuracy."""
     best_h = 1.0
+    best_threshold = None
     best_acc = 0.0
-    h_values = np.linspace(0.01, 5.0, 500)  # Finer search range and more steps
+    h_values = np.linspace(0.01, 5.0, 100)  # Coarser search for h
+    
     for h in h_values:
         def scaled_encoding(x):
             return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(len(x))], axis=0)
+        
         # Collect endpoints
         final_endpoints = []
         for class_label in unique_classes:
@@ -208,22 +264,57 @@ def optimize_glxac_l_scaling(X_data, y_data, unique_classes, class_to_index, col
             for row in X_class:
                 path = scaled_encoding(row)
                 final_endpoints.append((path[-1], colors[color_idx], class_label))
-        # Use existing accuracy function
-        _, acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
-        if acc > best_acc:
-            best_acc = acc
+        
+        # Get u_positions for threshold optimization
+        u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
+        class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
+        
+        # Try different threshold positions
+        if len(unique_classes) == 2:
+            # For binary classification, try thresholds between class means
+            first_class_mask = (class_labels == unique_classes[0])
+            first_class_positions = u_positions[first_class_mask]
+            other_class_positions = u_positions[~first_class_mask]
+            
+            if len(first_class_positions) > 0 and len(other_class_positions) > 0:
+                min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
+                max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
+                threshold_candidates = np.linspace(min_pos, max_pos, 50)
+            else:
+                threshold_candidates = [np.mean(u_positions)]
+        else:
+            # For multiclass, try thresholds around the mean
+            mean_pos = np.mean(u_positions)
+            std_pos = np.std(u_positions)
+            threshold_candidates = np.linspace(mean_pos - std_pos, mean_pos + std_pos, 50)
+        
+        # Find best threshold for this h value
+        best_threshold_for_h = None
+        best_acc_for_h = 0.0
+        
+        for threshold in threshold_candidates:
+            _, acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, threshold)
+            if acc > best_acc_for_h:
+                best_acc_for_h = acc
+                best_threshold_for_h = threshold
+        
+        # Update global best if this h gives better accuracy
+        if best_acc_for_h > best_acc:
+            best_acc = best_acc_for_h
             best_h = h
-    return best_h, best_acc
+            best_threshold = best_threshold_for_h
+    
+    return best_h, best_threshold, best_acc
 
 def glxac_l_encoding(x, h=1.0):
     # x[i] in [0,1], angle = x[i] * 90 degrees = x[i] * (π/2) radians, scaled by h
     return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(n_features)], axis=0)
 
 # Find optimal h for GLxAC-L
-best_h, best_acc = optimize_glxac_l_scaling(X_norm_sorted, y, unique_classes, class_to_index, colors)
-print(f'Optimal scaling factor for GLxAC-L: h={best_h:.3f} (accuracy={best_acc:.3f})')
+best_h, best_threshold, best_acc = optimize_glxac_l_scaling(X_norm_sorted, y, unique_classes, class_to_index, colors)
+print(f'Optimal scaling factor for GLxAC-L: h={best_h:.3f}, threshold={best_threshold:.3f} (accuracy={best_acc:.3f})')
 
-def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes):
+def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes, custom_threshold=None):
     """Plot paths with shared U-axis, first class up, others down, with endpoint projections."""
     # Pre-allocate arrays for better performance
     all_segments = []
@@ -331,7 +422,7 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                   edgecolor='black', linewidth=0.5)
     
     # Find optimal separation and draw separation line
-    threshold, accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+    threshold, accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold)
     
     # Draw separation line
     ax.axvline(x=threshold, color='yellow', linestyle='--', linewidth=1, alpha=0.8, zorder=5)
@@ -356,13 +447,19 @@ for i, class_label in enumerate(unique_classes):
     handle = plt.Line2D([], [], color=colors[color_idx], linewidth=2, label=str(class_label))
     legend_handles.append(handle)
 
-for idx, encoding_func in enumerate([glc_l_encoding, lambda x: glxac_l_encoding(x, h=best_h)]):
-    ax = axes[idx]
-    plot_with_shared_u_axis(ax, encoding_func, X_norm_sorted, y, colors, class_to_index, unique_classes)
-    ax.set_title(titles[idx] + "\n(Features sorted by LDA importance)")
-    ax.axis('equal')
-    ax.grid(True)
-    ax.set_facecolor('lightgrey')  # Set light grey background
+# Plot GLC-L with default threshold calculation
+plot_with_shared_u_axis(axes[0], glc_l_encoding, X_norm_sorted, y, colors, class_to_index, unique_classes)
+axes[0].set_title(titles[0] + "\n(Features sorted by LDA importance)")
+axes[0].axis('equal')
+axes[0].grid(True)
+axes[0].set_facecolor('lightgrey')
+
+# Plot GLxAC-L with optimized threshold
+plot_with_shared_u_axis(axes[1], lambda x: glxac_l_encoding(x, h=best_h), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold)
+axes[1].set_title(titles[1] + "\n(Features sorted by LDA importance)")
+axes[1].axis('equal')
+axes[1].grid(True)
+axes[1].set_facecolor('lightgrey')
 
 # Add single legend to the figure (not individual subplots)
 fig.legend(handles=legend_handles, loc='upper right', bbox_to_anchor=(0.98, 0.98))
