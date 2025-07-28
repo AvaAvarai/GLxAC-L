@@ -171,38 +171,50 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
     
     # Calculate accuracy properly
     if len(unique_classes) == 2:
-        # For binary classification: determine which class is on which side
+        # For binary classification: try both possible class assignments
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
         
-        # Determine which side each class is predominantly on
-        first_class_mean = np.mean(first_class_positions)
-        other_class_mean = np.mean(other_class_positions)
+        # Try both assignments: class A on left vs class A on right
+        best_accuracy = 0.0
+        best_assignment = None
         
-        # Assign classes to sides based on their means
-        if first_class_mean < other_class_mean:
-            # First class is on left side (below threshold)
-            predicted_left = unique_classes[0]
-            predicted_right = unique_classes[1]
-        else:
-            # First class is on right side (above threshold)
-            predicted_left = unique_classes[1]
-            predicted_right = unique_classes[0]
-        
-        # Count correct predictions
+        # Assignment 1: First class on left, second class on right
         correct = 0
         for i, pos in enumerate(u_positions):
             actual_class = class_labels[i]
             if pos < threshold:
-                predicted_class = predicted_left
+                predicted_class = unique_classes[0]  # First class on left
             else:
-                predicted_class = predicted_right
+                predicted_class = unique_classes[1]  # Second class on right
             
             if actual_class == predicted_class:
                 correct += 1
         
-        accuracy = correct / len(u_positions)
+        accuracy1 = correct / len(u_positions)
+        if accuracy1 > best_accuracy:
+            best_accuracy = accuracy1
+            best_assignment = (unique_classes[0], unique_classes[1])  # (left_class, right_class)
+        
+        # Assignment 2: First class on right, second class on left
+        correct = 0
+        for i, pos in enumerate(u_positions):
+            actual_class = class_labels[i]
+            if pos < threshold:
+                predicted_class = unique_classes[1]  # Second class on left
+            else:
+                predicted_class = unique_classes[0]  # First class on right
+            
+            if actual_class == predicted_class:
+                correct += 1
+        
+        accuracy2 = correct / len(u_positions)
+        if accuracy2 > best_accuracy:
+            best_accuracy = accuracy2
+            best_assignment = (unique_classes[1], unique_classes[0])  # (left_class, right_class)
+        
+        accuracy = best_accuracy
         
     else:
         # For multiclass: find the most common class on each side
