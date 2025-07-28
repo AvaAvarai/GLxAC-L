@@ -31,9 +31,9 @@ def select_csv_file():
     root = tk.Tk()
     root.withdraw()  # Hide the main window
     
-    # Set initial directory to 'data' folder
-    data_dir = os.path.join(os.getcwd(), 'data')
-    # Create data directory if it doesn't exist
+    # Set initial directory to 'datasets' folder
+    data_dir = os.path.join(os.getcwd(), 'datasets')
+    # Create datasets directory if it doesn't exist
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
     
