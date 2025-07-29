@@ -3,10 +3,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.colors as mcolors
 import tkinter as tk
 from tkinter import filedialog
 import os
+import seaborn as sns
 
 # Load data from CSV file
 # Assuming the CSV has a 'class' column for labels and all other columns are features
@@ -257,6 +259,108 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
     
     return threshold, accuracy
 
+def generate_predictions_and_confusion_matrix(encoding_func, X_data, y_data, unique_classes, custom_threshold=None):
+    """Generate predictions using the encoding function and return confusion matrix."""
+    # Collect endpoints for all samples
+    final_endpoints = []
+    for i, row in enumerate(X_data):
+        path = encoding_func(row)
+        final_endpoints.append((path[-1], None, y_data[i]))  # (endpoint, color, class_label)
+    
+    # Get u_positions and find threshold
+    u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
+    class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
+    
+    # Find optimal threshold
+    if custom_threshold is not None:
+        threshold = custom_threshold
+    else:
+        if len(unique_classes) == 2:
+            first_class_mask = (class_labels == unique_classes[0])
+            first_class_positions = u_positions[first_class_mask]
+            other_class_positions = u_positions[~first_class_mask]
+            threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+        else:
+            threshold = np.mean(u_positions)
+    
+    # Generate predictions
+    predictions = []
+    if len(unique_classes) == 2:
+        # For binary classification: try both assignments and choose the better one
+        first_class_mask = (class_labels == unique_classes[0])
+        first_class_positions = u_positions[first_class_mask]
+        other_class_positions = u_positions[~first_class_mask]
+        
+        # Try both assignments
+        correct1 = 0
+        correct2 = 0
+        pred1 = []
+        pred2 = []
+        
+        for i, pos in enumerate(u_positions):
+            actual_class = class_labels[i]
+            
+            # Assignment 1: First class on left, second class on right
+            if pos < threshold:
+                predicted_class1 = unique_classes[0]
+            else:
+                predicted_class1 = unique_classes[1]
+            pred1.append(predicted_class1)
+            if actual_class == predicted_class1:
+                correct1 += 1
+            
+            # Assignment 2: First class on right, second class on left
+            if pos < threshold:
+                predicted_class2 = unique_classes[1]
+            else:
+                predicted_class2 = unique_classes[0]
+            pred2.append(predicted_class2)
+            if actual_class == predicted_class2:
+                correct2 += 1
+        
+        # Choose the better assignment
+        if correct1 >= correct2:
+            predictions = pred1
+        else:
+            predictions = pred2
+            
+    else:
+        # For multiclass: find the most common class on each side
+        left_mask = u_positions < threshold
+        right_mask = u_positions >= threshold
+        
+        # Find most common class on left side
+        if np.any(left_mask):
+            left_classes = class_labels[left_mask]
+            left_class_counts = {}
+            for cls in left_classes:
+                left_class_counts[cls] = left_class_counts.get(cls, 0) + 1
+            predicted_left = max(left_class_counts, key=left_class_counts.get)
+        else:
+            predicted_left = unique_classes[0]
+        
+        # Find most common class on right side
+        if np.any(right_mask):
+            right_classes = class_labels[right_mask]
+            right_class_counts = {}
+            for cls in right_classes:
+                right_class_counts[cls] = right_class_counts.get(cls, 0) + 1
+            predicted_right = max(right_class_counts, key=right_class_counts.get)
+        else:
+            predicted_right = unique_classes[0]
+        
+        # Generate predictions
+        for i, pos in enumerate(u_positions):
+            if pos < threshold:
+                predictions.append(predicted_left)
+            else:
+                predictions.append(predicted_right)
+    
+    # Generate confusion matrix
+    cm = confusion_matrix(class_labels, predictions, labels=unique_classes)
+    
+    return predictions, cm, threshold
+
 def optimize_glxac_l_scaling(X_data, y_data, unique_classes, class_to_index, colors):
     """Find the optimal scaling factor h and threshold for GLxAC-L by maximizing classification accuracy."""
     best_h = 1.0
@@ -448,7 +552,44 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
     # Draw shared U-axis
     ax.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.8, zorder=1)
 
-# Plot side-by-side
+# Generate predictions and confusion matrices for both encodings
+print("Generating predictions and confusion matrices...")
+
+# GLC-L predictions and confusion matrix
+glc_predictions, glc_cm, glc_threshold = generate_predictions_and_confusion_matrix(
+    glc_l_encoding, X_norm_sorted, y, unique_classes
+)
+
+# GLxAC-L predictions and confusion matrix
+glxac_predictions, glxac_cm, glxac_threshold = generate_predictions_and_confusion_matrix(
+    lambda x: glxac_l_encoding(x, h=best_h), X_norm_sorted, y, unique_classes, best_threshold
+)
+
+# Print confusion matrices
+print("\n" + "="*50)
+print("CONFUSION MATRICES")
+print("="*50)
+
+print(f"\nGLC-L Confusion Matrix (Threshold: {glc_threshold:.3f}):")
+print(glc_cm)
+print(f"Accuracy: {np.sum(np.diag(glc_cm)) / np.sum(glc_cm):.3f}")
+
+print(f"\nGL×AC-L Confusion Matrix (Threshold: {glxac_threshold:.3f}):")
+print(glxac_cm)
+print(f"Accuracy: {np.sum(np.diag(glxac_cm)) / np.sum(glxac_cm):.3f}")
+
+# Print classification reports
+print("\n" + "="*50)
+print("CLASSIFICATION REPORTS")
+print("="*50)
+
+print(f"\nGLC-L Classification Report:")
+print(classification_report(y, glc_predictions, target_names=[str(c) for c in unique_classes]))
+
+print(f"\nGL×AC-L Classification Report:")
+print(classification_report(y, glxac_predictions, target_names=[str(c) for c in unique_classes]))
+
+# Create 1x2 subplot layout (just the visualizations)
 fig, axes = plt.subplots(1, 2, figsize=(12, 6))
 titles = ['GLC-L (Length Encoding)', f'GL×AC-L (Angle Encoding, h={best_h:.2f})']
 
@@ -459,21 +600,21 @@ for i, class_label in enumerate(unique_classes):
     handle = plt.Line2D([], [], color=colors[color_idx], linewidth=2, label=str(class_label))
     legend_handles.append(handle)
 
-# Plot GLC-L with default threshold calculation
+# Plot GLC-L visualization (left)
 plot_with_shared_u_axis(axes[0], glc_l_encoding, X_norm_sorted, y, colors, class_to_index, unique_classes)
 axes[0].set_title(titles[0] + "\n(Features sorted by LDA importance)")
 axes[0].axis('equal')
 axes[0].grid(True)
 axes[0].set_facecolor('lightgrey')
 
-# Plot GLxAC-L with optimized threshold
+# Plot GLxAC-L visualization (right)
 plot_with_shared_u_axis(axes[1], lambda x: glxac_l_encoding(x, h=best_h), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold)
 axes[1].set_title(titles[1] + "\n(Features sorted by LDA importance)")
 axes[1].axis('equal')
 axes[1].grid(True)
 axes[1].set_facecolor('lightgrey')
 
-# Add single legend to the figure (not individual subplots)
+# Add single legend to the figure
 fig.legend(handles=legend_handles, loc='upper right', bbox_to_anchor=(0.98, 0.98))
 
 plt.suptitle(f"CSV Data Visualization in Two Encoding Schemes\n(Features sorted by LDA importance, {n_classes} classes)")
