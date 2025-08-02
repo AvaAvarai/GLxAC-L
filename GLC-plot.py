@@ -361,8 +361,8 @@ def generate_predictions_and_confusion_matrix(encoding_func, X_data, y_data, uni
     
     return predictions, cm, threshold
 
-def optimize_glxac_l_scaling(X_data, y_data, unique_classes, class_to_index, colors):
-    """Find the optimal scaling factor h and threshold for GLxAC-L by maximizing classification accuracy."""
+def optimize_gac_l_scaling(X_data, y_data, unique_classes, class_to_index, colors):
+    """Find the optimal scaling factor h and threshold for GAC-L by maximizing classification accuracy."""
     best_h = 1.0
     best_threshold = None
     best_acc = 0.0
@@ -422,13 +422,13 @@ def optimize_glxac_l_scaling(X_data, y_data, unique_classes, class_to_index, col
     
     return best_h, best_threshold, best_acc
 
-def glxac_l_encoding(x, h=1.0):
+def gac_l_encoding(x, h=1.0):
     # x[i] in [0,1], angle = x[i] * 90 degrees = x[i] * (π/2) radians, scaled by h
     return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(n_features)], axis=0)
 
-# Find optimal h for GLxAC-L
-best_h, best_threshold, best_acc = optimize_glxac_l_scaling(X_norm_sorted, y, unique_classes, class_to_index, colors)
-print(f'Optimal scaling factor for GLxAC-L: h={best_h:.3f}, threshold={best_threshold:.3f} (accuracy={best_acc:.3f})')
+# Find optimal h for GAC-L
+best_h, best_threshold, best_acc = optimize_gac_l_scaling(X_norm_sorted, y, unique_classes, class_to_index, colors)
+print(f'Optimal scaling factor for GAC-L: h={best_h:.3f}, threshold={best_threshold:.3f} (accuracy={best_acc:.3f})')
 
 def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes, custom_threshold=None):
     """Plot paths with shared U-axis, first class up, others down, with endpoint projections."""
@@ -560,9 +560,9 @@ glc_predictions, glc_cm, glc_threshold = generate_predictions_and_confusion_matr
     glc_l_encoding, X_norm_sorted, y, unique_classes
 )
 
-# GLxAC-L predictions and confusion matrix
-glxac_predictions, glxac_cm, glxac_threshold = generate_predictions_and_confusion_matrix(
-    lambda x: glxac_l_encoding(x, h=best_h), X_norm_sorted, y, unique_classes, best_threshold
+# GAC-L predictions and confusion matrix
+gac_predictions, gac_cm, gac_threshold = generate_predictions_and_confusion_matrix(
+    lambda x: gac_l_encoding(x, h=best_h), X_norm_sorted, y, unique_classes, best_threshold
 )
 
 # Print confusion matrices
@@ -574,9 +574,9 @@ print(f"\nGLC-L Confusion Matrix (Threshold: {glc_threshold:.3f}):")
 print(glc_cm)
 print(f"Accuracy: {np.sum(np.diag(glc_cm)) / np.sum(glc_cm):.3f}")
 
-print(f"\nGL×AC-L Confusion Matrix (Threshold: {glxac_threshold:.3f}):")
-print(glxac_cm)
-print(f"Accuracy: {np.sum(np.diag(glxac_cm)) / np.sum(glxac_cm):.3f}")
+print(f"\nGAC-L Confusion Matrix (Threshold: {gac_threshold:.3f}):")
+print(gac_cm)
+print(f"Accuracy: {np.sum(np.diag(gac_cm)) / np.sum(gac_cm):.3f}")
 
 # Print classification reports
 print("\n" + "="*50)
@@ -586,12 +586,12 @@ print("="*50)
 print(f"\nGLC-L Classification Report:")
 print(classification_report(y, glc_predictions, target_names=[str(c) for c in unique_classes]))
 
-print(f"\nGL×AC-L Classification Report:")
-print(classification_report(y, glxac_predictions, target_names=[str(c) for c in unique_classes]))
+print(f"\nGAC-L Classification Report:")
+print(classification_report(y, gac_predictions, target_names=[str(c) for c in unique_classes]))
 
 # Create 1x2 subplot layout (just the visualizations)
 fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-titles = ['GLC-L (Length Encoding)', f'GL×AC-L (Angle Encoding, h={best_h:.2f})']
+titles = ['GLC-L (Length Encoding)', f'GAC-L (Angle Encoding, h={best_h:.2f})']
 
 # Create legend handles for all classes
 legend_handles = []
@@ -607,8 +607,8 @@ axes[0].axis('equal')
 axes[0].grid(True)
 axes[0].set_facecolor('lightgrey')
 
-# Plot GLxAC-L visualization (right)
-plot_with_shared_u_axis(axes[1], lambda x: glxac_l_encoding(x, h=best_h), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold)
+# Plot GAC-L visualization (right)
+plot_with_shared_u_axis(axes[1], lambda x: gac_l_encoding(x, h=best_h), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold)
 axes[1].set_title(titles[1] + "\n(Features sorted by LDA importance)")
 axes[1].axis('equal')
 axes[1].grid(True)

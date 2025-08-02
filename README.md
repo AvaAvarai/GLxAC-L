@@ -1,6 +1,6 @@
-# GLxAC-L
+# GAC-L
 
-Experimental workspace for new forms of General Line Coordinates Linear
+Experimental workspace for new forms of General Angular Coordinates Linear with comparison to former General Line Coordinates Linear.
 
 ## License
 
