@@ -6,7 +6,7 @@ from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.colors as mcolors
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import os
 import seaborn as sns
 
@@ -49,6 +49,53 @@ def select_csv_file():
     root.destroy()  # Clean up the root window
     return file_path
 
+def select_two_classes(unique_classes):
+    """Allow user to select which two classes to use for binary classification."""
+    root = tk.Tk()
+    root.title("Select Two Classes")
+    root.geometry("400x300")
+    
+    # Center the window
+    root.eval('tk::PlaceWindow . center')
+    
+    # Create and pack widgets
+    tk.Label(root, text="Select two classes for binary classification:", font=("Arial", 12)).pack(pady=10)
+    
+    # Create listbox with all classes
+    listbox = tk.Listbox(root, selectmode=tk.MULTIPLE, height=10, font=("Arial", 10))
+    listbox.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
+    
+    # Populate listbox with classes
+    for i, class_label in enumerate(unique_classes):
+        listbox.insert(tk.END, f"{i+1}. {class_label}")
+    
+    selected_classes = []
+    
+    def on_ok():
+        nonlocal selected_classes
+        selection = listbox.curselection()
+        if len(selection) != 2:
+            messagebox.showerror("Error", "Please select exactly 2 classes.")
+            return
+        
+        selected_classes = [unique_classes[i] for i in selection]
+        root.destroy()
+    
+    def on_cancel():
+        root.destroy()
+    
+    # Create buttons
+    button_frame = tk.Frame(root)
+    button_frame.pack(pady=10)
+    
+    tk.Button(button_frame, text="OK", command=on_ok, width=10).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Cancel", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+    
+    # Start the GUI
+    root.mainloop()
+    
+    return selected_classes
+
 # Load data using file picker
 print("Please select your CSV file...")
 csv_file_path = select_csv_file()
@@ -64,6 +111,31 @@ try:
     print(f"Number of features: {len(feature_names)}")
     print(f"Features: {feature_names}")
     print(f"Classes: {np.unique(y)}")
+    
+    # Check if we have more than 2 classes
+    unique_classes = np.unique(y)
+    if len(unique_classes) > 2:
+        print(f"\nDataset has {len(unique_classes)} classes. Please select 2 classes for binary classification.")
+        selected_classes = select_two_classes(unique_classes)
+        
+        if not selected_classes or len(selected_classes) != 2:
+            print("No classes selected or incorrect number of classes. Exiting.")
+            exit()
+        
+        # Filter data to only include selected classes
+        mask = np.isin(y, selected_classes)
+        X = X[mask]
+        y = y[mask]
+        
+        print(f"Selected classes: {selected_classes}")
+        print(f"Filtered dataset: {len(X)} samples")
+    
+    # Ensure we have exactly 2 classes
+    unique_classes = np.unique(y)
+    if len(unique_classes) != 2:
+        print("Error: Dataset must have exactly 2 classes for binary classification.")
+        exit()
+        
 except FileNotFoundError:
     print("CSV file not found. Please check the file path.")
     exit()
@@ -113,12 +185,8 @@ X_norm = scaler.fit_transform(X)
 lda = LinearDiscriminantAnalysis()
 lda.fit(X_norm, y)
 
-# For multiclass, sum absolute values across all discriminant axes
-lda_abs = np.abs(lda.coef_)
-if lda_abs.ndim == 2:
-    lda_importance = lda_abs.sum(axis=0)
-else:
-    lda_importance = lda_abs
+# For binary classification, use the single discriminant axis
+lda_importance = np.abs(lda.coef_[0])
 sorted_indices = np.argsort(-lda_importance)  # descending order
 
 # Reorder data and feature names
@@ -162,100 +230,56 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
     if custom_threshold is not None:
         threshold = custom_threshold
     else:
-        # Find optimal separation point
-        if len(unique_classes) == 2:
-            first_class_mask = (class_labels == unique_classes[0])
-            first_class_positions = u_positions[first_class_mask]
-            other_class_positions = u_positions[~first_class_mask]
-            threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
-        else:
-            threshold = np.mean(u_positions)
-    
-    # Calculate accuracy properly
-    if len(unique_classes) == 2:
-        # For binary classification: try both possible class assignments
+        # Find optimal separation point for binary classification
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
-        
-        # Try both assignments: class A on left vs class A on right
-        best_accuracy = 0.0
-        best_assignment = None
-        
-        # Assignment 1: First class on left, second class on right
-        correct = 0
-        for i, pos in enumerate(u_positions):
-            actual_class = class_labels[i]
-            if pos < threshold:
-                predicted_class = unique_classes[0]  # First class on left
-            else:
-                predicted_class = unique_classes[1]  # Second class on right
-            
-            if actual_class == predicted_class:
-                correct += 1
-        
-        accuracy1 = correct / len(u_positions)
-        if accuracy1 > best_accuracy:
-            best_accuracy = accuracy1
-            best_assignment = (unique_classes[0], unique_classes[1])  # (left_class, right_class)
-        
-        # Assignment 2: First class on right, second class on left
-        correct = 0
-        for i, pos in enumerate(u_positions):
-            actual_class = class_labels[i]
-            if pos < threshold:
-                predicted_class = unique_classes[1]  # Second class on left
-            else:
-                predicted_class = unique_classes[0]  # First class on right
-            
-            if actual_class == predicted_class:
-                correct += 1
-        
-        accuracy2 = correct / len(u_positions)
-        if accuracy2 > best_accuracy:
-            best_accuracy = accuracy2
-            best_assignment = (unique_classes[1], unique_classes[0])  # (left_class, right_class)
-        
-        accuracy = best_accuracy
-        
-    else:
-        # For multiclass: find the most common class on each side
-        left_mask = u_positions < threshold
-        right_mask = u_positions >= threshold
-        
-        # Find most common class on left side
-        if np.any(left_mask):
-            left_classes = class_labels[left_mask]
-            left_class_counts = {}
-            for cls in left_classes:
-                left_class_counts[cls] = left_class_counts.get(cls, 0) + 1
-            predicted_left = max(left_class_counts, key=left_class_counts.get)
+        threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+    
+    # Calculate accuracy for binary classification: try both possible class assignments
+    first_class_mask = (class_labels == unique_classes[0])
+    first_class_positions = u_positions[first_class_mask]
+    other_class_positions = u_positions[~first_class_mask]
+    
+    # Try both assignments: class A on left vs class A on right
+    best_accuracy = 0.0
+    best_assignment = None
+    
+    # Assignment 1: First class on left, second class on right
+    correct = 0
+    for i, pos in enumerate(u_positions):
+        actual_class = class_labels[i]
+        if pos < threshold:
+            predicted_class = unique_classes[0]  # First class on left
         else:
-            predicted_left = unique_classes[0]  # Default if no left side data
+            predicted_class = unique_classes[1]  # Second class on right
         
-        # Find most common class on right side
-        if np.any(right_mask):
-            right_classes = class_labels[right_mask]
-            right_class_counts = {}
-            for cls in right_classes:
-                right_class_counts[cls] = right_class_counts.get(cls, 0) + 1
-            predicted_right = max(right_class_counts, key=right_class_counts.get)
+        if actual_class == predicted_class:
+            correct += 1
+    
+    accuracy1 = correct / len(u_positions)
+    if accuracy1 > best_accuracy:
+        best_accuracy = accuracy1
+        best_assignment = (unique_classes[0], unique_classes[1])  # (left_class, right_class)
+    
+    # Assignment 2: First class on right, second class on left
+    correct = 0
+    for i, pos in enumerate(u_positions):
+        actual_class = class_labels[i]
+        if pos < threshold:
+            predicted_class = unique_classes[1]  # Second class on left
         else:
-            predicted_right = unique_classes[0]  # Default if no right side data
+            predicted_class = unique_classes[0]  # First class on right
         
-        # Count correct predictions
-        correct = 0
-        for i, pos in enumerate(u_positions):
-            actual_class = class_labels[i]
-            if pos < threshold:
-                predicted_class = predicted_left
-            else:
-                predicted_class = predicted_right
-            
-            if actual_class == predicted_class:
-                correct += 1
-        
-        accuracy = correct / len(u_positions)
+        if actual_class == predicted_class:
+            correct += 1
+    
+    accuracy2 = correct / len(u_positions)
+    if accuracy2 > best_accuracy:
+        best_accuracy = accuracy2
+        best_assignment = (unique_classes[1], unique_classes[0])  # (left_class, right_class)
+    
+    accuracy = best_accuracy
     
     return threshold, accuracy
 
@@ -271,90 +295,52 @@ def generate_predictions_and_confusion_matrix(encoding_func, X_data, y_data, uni
     u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
     class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
     
-    # Find optimal threshold
+    # Find optimal threshold for binary classification
     if custom_threshold is not None:
         threshold = custom_threshold
     else:
-        if len(unique_classes) == 2:
-            first_class_mask = (class_labels == unique_classes[0])
-            first_class_positions = u_positions[first_class_mask]
-            other_class_positions = u_positions[~first_class_mask]
-            threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
-        else:
-            threshold = np.mean(u_positions)
-    
-    # Generate predictions
-    predictions = []
-    if len(unique_classes) == 2:
-        # For binary classification: try both assignments and choose the better one
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
+        threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+    
+    # Generate predictions for binary classification: try both assignments and choose the better one
+    first_class_mask = (class_labels == unique_classes[0])
+    first_class_positions = u_positions[first_class_mask]
+    other_class_positions = u_positions[~first_class_mask]
+    
+    # Try both assignments
+    correct1 = 0
+    correct2 = 0
+    pred1 = []
+    pred2 = []
+    
+    for i, pos in enumerate(u_positions):
+        actual_class = class_labels[i]
         
-        # Try both assignments
-        correct1 = 0
-        correct2 = 0
-        pred1 = []
-        pred2 = []
-        
-        for i, pos in enumerate(u_positions):
-            actual_class = class_labels[i]
-            
-            # Assignment 1: First class on left, second class on right
-            if pos < threshold:
-                predicted_class1 = unique_classes[0]
-            else:
-                predicted_class1 = unique_classes[1]
-            pred1.append(predicted_class1)
-            if actual_class == predicted_class1:
-                correct1 += 1
-            
-            # Assignment 2: First class on right, second class on left
-            if pos < threshold:
-                predicted_class2 = unique_classes[1]
-            else:
-                predicted_class2 = unique_classes[0]
-            pred2.append(predicted_class2)
-            if actual_class == predicted_class2:
-                correct2 += 1
-        
-        # Choose the better assignment
-        if correct1 >= correct2:
-            predictions = pred1
+        # Assignment 1: First class on left, second class on right
+        if pos < threshold:
+            predicted_class1 = unique_classes[0]
         else:
-            predictions = pred2
-            
+            predicted_class1 = unique_classes[1]
+        pred1.append(predicted_class1)
+        if actual_class == predicted_class1:
+            correct1 += 1
+        
+        # Assignment 2: First class on right, second class on left
+        if pos < threshold:
+            predicted_class2 = unique_classes[1]
+        else:
+            predicted_class2 = unique_classes[0]
+        pred2.append(predicted_class2)
+        if actual_class == predicted_class2:
+            correct2 += 1
+    
+    # Choose the better assignment
+    if correct1 >= correct2:
+        predictions = pred1
     else:
-        # For multiclass: find the most common class on each side
-        left_mask = u_positions < threshold
-        right_mask = u_positions >= threshold
-        
-        # Find most common class on left side
-        if np.any(left_mask):
-            left_classes = class_labels[left_mask]
-            left_class_counts = {}
-            for cls in left_classes:
-                left_class_counts[cls] = left_class_counts.get(cls, 0) + 1
-            predicted_left = max(left_class_counts, key=left_class_counts.get)
-        else:
-            predicted_left = unique_classes[0]
-        
-        # Find most common class on right side
-        if np.any(right_mask):
-            right_classes = class_labels[right_mask]
-            right_class_counts = {}
-            for cls in right_classes:
-                right_class_counts[cls] = right_class_counts.get(cls, 0) + 1
-            predicted_right = max(right_class_counts, key=right_class_counts.get)
-        else:
-            predicted_right = unique_classes[0]
-        
-        # Generate predictions
-        for i, pos in enumerate(u_positions):
-            if pos < threshold:
-                predictions.append(predicted_left)
-            else:
-                predictions.append(predicted_right)
+        predictions = pred2
     
     # Generate confusion matrix
     cm = confusion_matrix(class_labels, predictions, labels=unique_classes)
@@ -385,24 +371,17 @@ def optimize_gac_l_scaling(X_data, y_data, unique_classes, class_to_index, color
         u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
         class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
         
-        # Try different threshold positions
-        if len(unique_classes) == 2:
-            # For binary classification, try thresholds between class means
-            first_class_mask = (class_labels == unique_classes[0])
-            first_class_positions = u_positions[first_class_mask]
-            other_class_positions = u_positions[~first_class_mask]
-            
-            if len(first_class_positions) > 0 and len(other_class_positions) > 0:
-                min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
-                max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
-                threshold_candidates = np.linspace(min_pos, max_pos, 50)
-            else:
-                threshold_candidates = [np.mean(u_positions)]
+        # Try different threshold positions for binary classification
+        first_class_mask = (class_labels == unique_classes[0])
+        first_class_positions = u_positions[first_class_mask]
+        other_class_positions = u_positions[~first_class_mask]
+        
+        if len(first_class_positions) > 0 and len(other_class_positions) > 0:
+            min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
+            max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
+            threshold_candidates = np.linspace(min_pos, max_pos, 50)
         else:
-            # For multiclass, try thresholds around the mean
-            mean_pos = np.mean(u_positions)
-            std_pos = np.std(u_positions)
-            threshold_candidates = np.linspace(mean_pos - std_pos, mean_pos + std_pos, 50)
+            threshold_candidates = [np.mean(u_positions)]
         
         # Find best threshold for this h value
         best_threshold_for_h = None
