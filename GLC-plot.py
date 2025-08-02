@@ -970,13 +970,16 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                color=color, linestyle=':', alpha=0.6, linewidth=1)
         
         # Draw colored dots with yellow outline for misclassified cases
-        edge_color = 'red' if is_misclassified else 'black'
-        edge_width = 1.5 if is_misclassified else 0.5
-        
-        ax.scatter(x_end, y_end, color=color, s=8, alpha=0.6, zorder=10, 
-                  edgecolor=edge_color, linewidth=edge_width)
-        ax.scatter(x_end, 0, color=color, s=6, alpha=0.6, zorder=10, 
-                  edgecolor=edge_color, linewidth=edge_width)
+        edge_color = 'yellow' if is_misclassified else 'black'
+        edge_width = 0.5
+         
+        # Use higher zorder for misclassified cases to draw them on top
+        zorder_value = 15 if is_misclassified else 10
+         
+        ax.scatter(x_end, y_end, color=color, s=8, alpha=0.6, zorder=zorder_value, 
+                   edgecolor=edge_color, linewidth=edge_width)
+        ax.scatter(x_end, 0, color=color, s=6, alpha=0.6, zorder=zorder_value, 
+                   edgecolor=edge_color, linewidth=edge_width)
     
     # Draw separation line
     ax.axvline(x=threshold, color='yellow', linestyle='--', linewidth=1, alpha=0.8, zorder=5)
