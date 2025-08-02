@@ -831,14 +831,14 @@ for i, class_label in enumerate(unique_classes):
 
 # Plot GLC-L visualization (left) - let it find its own optimal threshold
 plot_with_shared_u_axis(axes[0], glc_l_encoding, X_norm_sorted, y, colors, class_to_index, unique_classes, pre_calculated_accuracy=glc_accuracy)
-axes[0].set_title(titles[0] + "\n(Features sorted by LDA importance)")
+axes[0].set_title(titles[0])
 axes[0].axis('equal')
 axes[0].grid(True)
 axes[0].set_facecolor('lightgrey')
 
 # Plot GAC-L visualization (right) - use the optimized threshold from GAC-L optimization
 plot_with_shared_u_axis(axes[1], lambda x: gac_l_encoding(x, h_per_attribute=best_h_per_attribute), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold, pre_calculated_accuracy=gac_accuracy)
-axes[1].set_title(titles[1] + "\n(Features sorted by LDA importance)")
+axes[1].set_title(titles[1])
 axes[1].axis('equal')
 axes[1].grid(True)
 axes[1].set_facecolor('lightgrey')
@@ -846,6 +846,6 @@ axes[1].set_facecolor('lightgrey')
 # Add single legend to the figure
 fig.legend(handles=legend_handles, loc='upper right', bbox_to_anchor=(0.98, 0.98))
 
-plt.suptitle(f"CSV Data Visualization in Two Encoding Schemes\n(Features sorted by LDA importance, {n_classes} classes)")
+plt.suptitle(f"CSV Data Visualization in Two Encoding Schemes\n(Features sorted by LDA importance)")
 plt.tight_layout()
 plt.show()
