@@ -161,11 +161,9 @@ def generate_colors(unique_classes):
         elif class_lower == 'malignant':
             colors.append('red')
         else:
-            # Use colormap for other classes - properly scale by number of classes
-            cmap = plt.cm.viridis  # Use a continuous colormap
-            # Scale the color index to [0, 1] range based on total number of classes
-            color_index = i / (n_classes - 1) if n_classes > 1 else 0
-            colors.append(cmap(color_index))
+            colors.append('blue')
+        if len(colors) == 1:
+            colors.append('purple')
     
     return colors
 
@@ -706,23 +704,70 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                 linewidth=segment['linewidth'],
                 alpha=segment['alpha'])
     
-    # Batch project final endpoints to U-axis
-    for endpoint, color, class_label in final_endpoints:
-        x_end, y_end = endpoint
-        # Draw dotted line from endpoint to U-axis
-        ax.plot([x_end, x_end], [y_end, 0], 
-               color=color, linestyle=':', alpha=0.6, linewidth=1)
-        # Draw colored dots
-        ax.scatter(x_end, y_end, color=color, s=8, alpha=0.6, zorder=10, 
-                  edgecolor='black', linewidth=0.5)
-        ax.scatter(x_end, 0, color=color, s=6, alpha=0.6, zorder=10, 
-                  edgecolor='black', linewidth=0.5)
-    
     # Find optimal separation and draw separation line
     threshold, calculated_accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold)
     
     # Use pre-calculated accuracy if provided, otherwise use the calculated one
     accuracy_to_display = pre_calculated_accuracy if pre_calculated_accuracy is not None else calculated_accuracy
+    
+    # Determine predictions and identify misclassified cases
+    u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
+    class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
+    
+    # Try both assignments to find the better one
+    correct1 = 0
+    correct2 = 0
+    pred1 = []
+    pred2 = []
+    
+    for i, pos in enumerate(u_positions):
+        actual_class = class_labels[i]
+        
+        # Assignment 1: First class on left, second class on right
+        if pos < threshold:
+            predicted_class1 = unique_classes[0]
+        else:
+            predicted_class1 = unique_classes[1]
+        pred1.append(predicted_class1)
+        if actual_class == predicted_class1:
+            correct1 += 1
+        
+        # Assignment 2: First class on right, second class on left
+        if pos < threshold:
+            predicted_class2 = unique_classes[1]
+        else:
+            predicted_class2 = unique_classes[0]
+        pred2.append(predicted_class2)
+        if actual_class == predicted_class2:
+            correct2 += 1
+    
+    # Choose the better assignment
+    if correct1 >= correct2:
+        predictions = pred1
+    else:
+        predictions = pred2
+    
+    # Batch project final endpoints to U-axis
+    for i, (endpoint, color, class_label) in enumerate(final_endpoints):
+        x_end, y_end = endpoint
+        actual_class = class_labels[i]
+        predicted_class = predictions[i]
+        
+        # Determine if this case is misclassified
+        is_misclassified = actual_class != predicted_class
+        
+        # Draw dotted line from endpoint to U-axis
+        ax.plot([x_end, x_end], [y_end, 0], 
+               color=color, linestyle=':', alpha=0.6, linewidth=1)
+        
+        # Draw colored dots with yellow outline for misclassified cases
+        edge_color = 'red' if is_misclassified else 'black'
+        edge_width = 1.5 if is_misclassified else 0.5
+        
+        ax.scatter(x_end, y_end, color=color, s=8, alpha=0.6, zorder=10, 
+                  edgecolor=edge_color, linewidth=edge_width)
+        ax.scatter(x_end, 0, color=color, s=6, alpha=0.6, zorder=10, 
+                  edgecolor=edge_color, linewidth=edge_width)
     
     # Draw separation line
     ax.axvline(x=threshold, color='yellow', linestyle='--', linewidth=1, alpha=0.8, zorder=5)
