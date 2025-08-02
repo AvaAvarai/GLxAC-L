@@ -148,23 +148,19 @@ except Exception as e:
 
 # Generate unique colors for each class
 def generate_colors(unique_classes):
-    """Generate unique colors for each class with special handling for benign/malignant."""
-    n_classes = len(unique_classes)
+    """Generate unique colors for each class: benign=green, malignant=red, others=blue, purple, ..."""
     colors = []
-    
-    for i, class_label in enumerate(unique_classes):
+    for class_label in unique_classes:
         class_lower = str(class_label).lower()
-        
-        # Special colors for medical classes
         if class_lower == 'benign':
             colors.append('green')
         elif class_lower == 'malignant':
             colors.append('red')
         else:
-            colors.append('blue')
-        if len(colors) == 1:
-            colors.append('purple')
-    
+            if 'blue' not in colors:
+                colors.append('blue')
+            else:
+                colors.append('purple')
     return colors
 
 # Get unique classes and generate colors
