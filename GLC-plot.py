@@ -234,7 +234,26 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
-        threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+        
+        # Find the range where optimal threshold lives and select midpoint
+        if len(first_class_positions) > 0 and len(other_class_positions) > 0:
+            # Sort positions to find the range
+            all_positions = np.concatenate([first_class_positions, other_class_positions])
+            all_positions_sorted = np.sort(all_positions)
+            
+            # Find the range where we can place the threshold
+            # This is the range between the rightmost point of left class and leftmost point of right class
+            left_class_max = np.max(first_class_positions)
+            right_class_min = np.min(other_class_positions)
+            
+            # If classes overlap, use the mean as before
+            if left_class_max >= right_class_min:
+                threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+            else:
+                # Use the midpoint of the non-overlapping range
+                threshold = (left_class_max + right_class_min) / 2
+        else:
+            threshold = np.mean(u_positions)
     
     # Calculate accuracy for binary classification: try both possible class assignments
     first_class_mask = (class_labels == unique_classes[0])
@@ -302,7 +321,22 @@ def generate_predictions_and_confusion_matrix(encoding_func, X_data, y_data, uni
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
-        threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+        
+        # Find the range where optimal threshold lives and select midpoint
+        if len(first_class_positions) > 0 and len(other_class_positions) > 0:
+            # Find the range where we can place the threshold
+            # This is the range between the rightmost point of left class and leftmost point of right class
+            left_class_max = np.max(first_class_positions)
+            right_class_min = np.min(other_class_positions)
+            
+            # If classes overlap, use the mean as before
+            if left_class_max >= right_class_min:
+                threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+            else:
+                # Use the midpoint of the non-overlapping range
+                threshold = (left_class_max + right_class_min) / 2
+        else:
+            threshold = np.mean(u_positions)
     
     # Generate predictions for binary classification: try both assignments and choose the better one
     first_class_mask = (class_labels == unique_classes[0])
@@ -377,9 +411,19 @@ def optimize_gac_l_scaling(X_data, y_data, unique_classes, class_to_index, color
         other_class_positions = u_positions[~first_class_mask]
         
         if len(first_class_positions) > 0 and len(other_class_positions) > 0:
-            min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
-            max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
-            threshold_candidates = np.linspace(min_pos, max_pos, 50)
+            # Find the range where optimal threshold lives
+            left_class_max = np.max(first_class_positions)
+            right_class_min = np.min(other_class_positions)
+            
+            # If classes overlap, use the full range
+            if left_class_max >= right_class_min:
+                min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
+                max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
+                threshold_candidates = np.linspace(min_pos, max_pos, 50)
+            else:
+                # Use the non-overlapping range with some margin
+                margin = (right_class_min - left_class_max) * 0.1  # 10% margin
+                threshold_candidates = np.linspace(left_class_max + margin, right_class_min - margin, 50)
         else:
             threshold_candidates = [np.mean(u_positions)]
         
