@@ -226,43 +226,74 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
     u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
     class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
     
-    # Use custom threshold if provided, otherwise calculate optimal threshold
+    # Use custom threshold if provided, otherwise find optimal threshold
     if custom_threshold is not None:
         threshold = custom_threshold
     else:
-        # Find optimal separation point for binary classification
+        # Find optimal threshold by trying multiple positions
         first_class_mask = (class_labels == unique_classes[0])
         first_class_positions = u_positions[first_class_mask]
         other_class_positions = u_positions[~first_class_mask]
         
-        # Find the range where optimal threshold lives and select midpoint
         if len(first_class_positions) > 0 and len(other_class_positions) > 0:
-            # Sort positions to find the range
-            all_positions = np.concatenate([first_class_positions, other_class_positions])
-            all_positions_sorted = np.sort(all_positions)
-            
-            # Find the range where we can place the threshold
-            # This is the range between the rightmost point of left class and leftmost point of right class
+            # Find the range where optimal threshold lives
             left_class_max = np.max(first_class_positions)
             right_class_min = np.min(other_class_positions)
             
-            # If classes overlap, use the mean as before
+            # If classes overlap, try thresholds in the full range
             if left_class_max >= right_class_min:
-                threshold = (np.mean(first_class_positions) + np.mean(other_class_positions)) / 2
+                min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
+                max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
+                threshold_candidates = np.linspace(min_pos, max_pos, 50)
             else:
-                # Use the midpoint of the non-overlapping range
-                threshold = (left_class_max + right_class_min) / 2
+                # Use the non-overlapping range with some margin
+                margin = (right_class_min - left_class_max) * 0.1  # 10% margin
+                threshold_candidates = np.linspace(left_class_max + margin, right_class_min - margin, 50)
         else:
-            threshold = np.mean(u_positions)
+            threshold_candidates = [np.mean(u_positions)]
+        
+        # Find best threshold by testing all candidates
+        best_threshold = threshold_candidates[0]
+        best_accuracy = 0.0
+        
+        for candidate_threshold in threshold_candidates:
+            # Try both assignments for this threshold
+            # Assignment 1: First class on left, second class on right
+            correct1 = 0
+            for i, pos in enumerate(u_positions):
+                actual_class = class_labels[i]
+                if pos < candidate_threshold:
+                    predicted_class = unique_classes[0]
+                else:
+                    predicted_class = unique_classes[1]
+                if actual_class == predicted_class:
+                    correct1 += 1
+            accuracy1 = correct1 / len(u_positions)
+            
+            # Assignment 2: First class on right, second class on left
+            correct2 = 0
+            for i, pos in enumerate(u_positions):
+                actual_class = class_labels[i]
+                if pos < candidate_threshold:
+                    predicted_class = unique_classes[1]
+                else:
+                    predicted_class = unique_classes[0]
+                if actual_class == predicted_class:
+                    correct2 += 1
+            accuracy2 = correct2 / len(u_positions)
+            
+            # Use the better assignment
+            candidate_accuracy = max(accuracy1, accuracy2)
+            
+            if candidate_accuracy > best_accuracy:
+                best_accuracy = candidate_accuracy
+                best_threshold = candidate_threshold
+        
+        threshold = best_threshold
     
-    # Calculate accuracy for binary classification: try both possible class assignments
-    first_class_mask = (class_labels == unique_classes[0])
-    first_class_positions = u_positions[first_class_mask]
-    other_class_positions = u_positions[~first_class_mask]
-    
+    # Calculate final accuracy with the chosen threshold
     # Try both assignments: class A on left vs class A on right
     best_accuracy = 0.0
-    best_assignment = None
     
     # Assignment 1: First class on left, second class on right
     correct = 0
@@ -279,7 +310,6 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
     accuracy1 = correct / len(u_positions)
     if accuracy1 > best_accuracy:
         best_accuracy = accuracy1
-        best_assignment = (unique_classes[0], unique_classes[1])  # (left_class, right_class)
     
     # Assignment 2: First class on right, second class on left
     correct = 0
@@ -296,11 +326,8 @@ def find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom
     accuracy2 = correct / len(u_positions)
     if accuracy2 > best_accuracy:
         best_accuracy = accuracy2
-        best_assignment = (unique_classes[1], unique_classes[0])  # (left_class, right_class)
     
-    accuracy = best_accuracy
-    
-    return threshold, accuracy
+    return threshold, best_accuracy
 
 def generate_predictions_and_confusion_matrix(encoding_func, X_data, y_data, unique_classes, custom_threshold=None):
     """Generate predictions using the encoding function and return confusion matrix."""
@@ -381,79 +408,210 @@ def generate_predictions_and_confusion_matrix(encoding_func, X_data, y_data, uni
     
     return predictions, cm, threshold
 
-def optimize_gac_l_scaling(X_data, y_data, unique_classes, class_to_index, colors):
-    """Find the optimal scaling factor h and threshold for GAC-L by maximizing classification accuracy."""
-    best_h = 1.0
+def optimize_gac_l_scaling_per_attribute(X_data, y_data, unique_classes, class_to_index, colors):
+    """Find the optimal scaling factor h for each attribute by maximizing classification accuracy."""
+    n_features = X_data.shape[1]
+    
+    # Test different strategies
+    strategies = {
+        'uniform': np.ones(n_features),  # h=1.0 for all attributes
+        'lda_based': lda_importance / np.max(lda_importance),  # Normalized LDA coefficients
+        'search_based': np.ones(n_features)  # Will be filled by search
+    }
+    
+    best_strategy = 'uniform'
+    best_h_per_attribute = np.ones(n_features)
     best_threshold = None
     best_acc = 0.0
-    h_values = np.linspace(0.01, 5.0, 100)  # Coarser search for h
     
-    for h in h_values:
-        def scaled_encoding(x):
-            return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(len(x))], axis=0)
+    # Test uniform scaling (h=1.0 for all)
+    print("Testing uniform scaling (h=1.0 for all attributes)...")
+    uniform_acc, uniform_threshold = evaluate_strategy(strategies['uniform'], X_data, y_data, unique_classes, class_to_index, colors)
+    print(f"  Uniform scaling accuracy: {uniform_acc:.3f}")
+    
+    if uniform_acc > best_acc:
+        best_acc = uniform_acc
+        best_h_per_attribute = strategies['uniform'].copy()
+        best_threshold = uniform_threshold
+        best_strategy = 'uniform'
+    
+    # Test LDA-based scaling
+    print("Testing LDA-based scaling...")
+    lda_acc, lda_threshold = evaluate_strategy(strategies['lda_based'], X_data, y_data, unique_classes, class_to_index, colors)
+    print(f"  LDA-based scaling accuracy: {lda_acc:.3f}")
+    
+    if lda_acc > best_acc:
+        best_acc = lda_acc
+        best_h_per_attribute = strategies['lda_based'].copy()
+        best_threshold = lda_threshold
+        best_strategy = 'lda_based'
+    
+    # Test search-based optimization
+    print("Testing search-based optimization...")
+    search_h, search_threshold, search_acc = search_based_optimization(X_data, y_data, unique_classes, class_to_index, colors)
+    print(f"  Search-based scaling accuracy: {search_acc:.3f}")
+    
+    if search_acc > best_acc:
+        best_acc = search_acc
+        best_h_per_attribute = search_h
+        best_threshold = search_threshold
+        best_strategy = 'search_based'
+    
+    print(f"\nBest strategy: {best_strategy} (accuracy: {best_acc:.3f})")
+    print(f"Strategy comparison:")
+    print(f"  Uniform: {uniform_acc:.3f}")
+    print(f"  LDA-based: {lda_acc:.3f}")
+    print(f"  Search-based: {search_acc:.3f}")
+    
+    return best_h_per_attribute, best_threshold, best_acc
+
+def evaluate_strategy(h_per_attribute, X_data, y_data, unique_classes, class_to_index, colors):
+    """Evaluate a specific h_per_attribute strategy."""
+    def encoding_func(x):
+        vectors = []
+        for i in range(len(x)):
+            vectors.append([h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
+                         h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+        return np.cumsum(vectors, axis=0)
+    
+    # Collect endpoints
+    final_endpoints = []
+    for class_label in unique_classes:
+        X_class = X_data[y_data == class_label]
+        color_idx = class_to_index[class_label]
+        for row in X_class:
+            path = encoding_func(row)
+            final_endpoints.append((path[-1], colors[color_idx], class_label))
+    
+    # Find threshold and accuracy
+    threshold, accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+    
+    return accuracy, threshold
+
+def search_based_optimization(X_data, y_data, unique_classes, class_to_index, colors):
+    """Perform search-based optimization for each attribute."""
+    n_features = X_data.shape[1]
+    best_h_per_attribute = np.ones(n_features)
+    best_threshold = None
+    best_acc = 0.0
+    h_values = np.linspace(0.01, 1.0, 20)  # Reduced search space for efficiency
+    
+    # Optimize each attribute individually
+    for attr_idx in range(n_features):
+        print(f"  Optimizing attribute {attr_idx + 1}/{n_features}...")
         
-        # Collect endpoints
-        final_endpoints = []
-        for class_label in unique_classes:
-            X_class = X_data[y_data == class_label]
-            color_idx = class_to_index[class_label]
-            for row in X_class:
-                path = scaled_encoding(row)
-                final_endpoints.append((path[-1], colors[color_idx], class_label))
+        best_h_for_attr = 1.0
+        best_acc_for_attr = 0.0
         
-        # Get u_positions for threshold optimization
-        u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
-        class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
-        
-        # Try different threshold positions for binary classification
-        first_class_mask = (class_labels == unique_classes[0])
-        first_class_positions = u_positions[first_class_mask]
-        other_class_positions = u_positions[~first_class_mask]
-        
-        if len(first_class_positions) > 0 and len(other_class_positions) > 0:
-            # Find the range where optimal threshold lives
-            left_class_max = np.max(first_class_positions)
-            right_class_min = np.min(other_class_positions)
+        for h in h_values:
+            # Create encoding function that uses the current h for this attribute
+            def scaled_encoding_per_attr(x):
+                vectors = []
+                for i in range(len(x)):
+                    if i == attr_idx:
+                        # Use the current h value for this attribute
+                        vectors.append([h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)])
+                    else:
+                        # Use the best h found so far for other attributes
+                        vectors.append([best_h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
+                                     best_h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+                return np.cumsum(vectors, axis=0)
             
-            # If classes overlap, use the full range
-            if left_class_max >= right_class_min:
-                min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
-                max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
-                threshold_candidates = np.linspace(min_pos, max_pos, 50)
+            # Collect endpoints
+            final_endpoints = []
+            for class_label in unique_classes:
+                X_class = X_data[y_data == class_label]
+                color_idx = class_to_index[class_label]
+                for row in X_class:
+                    path = scaled_encoding_per_attr(row)
+                    final_endpoints.append((path[-1], colors[color_idx], class_label))
+            
+            # Get u_positions for threshold optimization
+            u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
+            class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
+            
+            # Try different threshold positions for binary classification
+            first_class_mask = (class_labels == unique_classes[0])
+            first_class_positions = u_positions[first_class_mask]
+            other_class_positions = u_positions[~first_class_mask]
+            
+            if len(first_class_positions) > 0 and len(other_class_positions) > 0:
+                # Find the range where optimal threshold lives
+                left_class_max = np.max(first_class_positions)
+                right_class_min = np.min(other_class_positions)
+                
+                # If classes overlap, use the full range
+                if left_class_max >= right_class_min:
+                    min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
+                    max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
+                    threshold_candidates = np.linspace(min_pos, max_pos, 10)  # Reduced for efficiency
+                else:
+                    # Use the non-overlapping range with some margin
+                    margin = (right_class_min - left_class_max) * 0.1  # 10% margin
+                    threshold_candidates = np.linspace(left_class_max + margin, right_class_min - margin, 10)
             else:
-                # Use the non-overlapping range with some margin
-                margin = (right_class_min - left_class_max) * 0.1  # 10% margin
-                threshold_candidates = np.linspace(left_class_max + margin, right_class_min - margin, 50)
-        else:
-            threshold_candidates = [np.mean(u_positions)]
+                threshold_candidates = [np.mean(u_positions)]
+            
+            # Find best threshold for this h value
+            best_threshold_for_h = None
+            best_acc_for_h = 0.0
+            
+            for threshold in threshold_candidates:
+                _, acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, threshold)
+                if acc > best_acc_for_h:
+                    best_acc_for_h = acc
+                    best_threshold_for_h = threshold
+            
+            # Update best h for this attribute if it gives better accuracy
+            if best_acc_for_h > best_acc_for_attr:
+                best_acc_for_attr = best_acc_for_h
+                best_h_for_attr = h
         
-        # Find best threshold for this h value
-        best_threshold_for_h = None
-        best_acc_for_h = 0.0
-        
-        for threshold in threshold_candidates:
-            _, acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, threshold)
-            if acc > best_acc_for_h:
-                best_acc_for_h = acc
-                best_threshold_for_h = threshold
-        
-        # Update global best if this h gives better accuracy
-        if best_acc_for_h > best_acc:
-            best_acc = best_acc_for_h
-            best_h = h
-            best_threshold = best_threshold_for_h
+        # Update the best h for this attribute
+        best_h_per_attribute[attr_idx] = best_h_for_attr
+        print(f"    Best h for attribute {attr_idx + 1}: {best_h_for_attr:.3f} (accuracy: {best_acc_for_attr:.3f})")
     
-    return best_h, best_threshold, best_acc
+    # Final evaluation with all optimized h values
+    def final_encoding(x):
+        vectors = []
+        for i in range(len(x)):
+            vectors.append([best_h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
+                         best_h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+        return np.cumsum(vectors, axis=0)
+    
+    # Collect final endpoints
+    final_endpoints = []
+    for class_label in unique_classes:
+        X_class = X_data[y_data == class_label]
+        color_idx = class_to_index[class_label]
+        for row in X_class:
+            path = final_encoding(row)
+            final_endpoints.append((path[-1], colors[color_idx], class_label))
+    
+    # Find final threshold and accuracy using the robust method
+    best_threshold, best_acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+    
+    return best_h_per_attribute, best_threshold, best_acc
 
-def gac_l_encoding(x, h=1.0):
-    # x[i] in [0,1], angle = x[i] * 90 degrees = x[i] * (π/2) radians, scaled by h
-    return np.cumsum([[h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)] for i in range(n_features)], axis=0)
+def gac_l_encoding(x, h_per_attribute=None):
+    # x[i] in [0,1], angle = x[i] * 90 degrees = x[i] * (π/2) radians, scaled by h_per_attribute
+    if h_per_attribute is None:
+        h_per_attribute = np.ones(n_features)
+    
+    vectors = []
+    for i in range(n_features):
+        vectors.append([h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
+                      h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+    return np.cumsum(vectors, axis=0)
 
-# Find optimal h for GAC-L
-best_h, best_threshold, best_acc = optimize_gac_l_scaling(X_norm_sorted, y, unique_classes, class_to_index, colors)
-print(f'Optimal scaling factor for GAC-L: h={best_h:.3f}, threshold={best_threshold:.3f} (accuracy={best_acc:.3f})')
+# Find optimal h for GAC-L (testing multiple strategies)
+best_h_per_attribute, best_threshold, best_acc = optimize_gac_l_scaling_per_attribute(X_norm_sorted, y, unique_classes, class_to_index, colors)
+print(f'\nFinal optimal scaling factors for GAC-L:')
+for i, h in enumerate(best_h_per_attribute):
+    print(f'  Attribute {i+1}: h={h:.3f}')
+print(f'Threshold: {best_threshold:.3f} (accuracy={best_acc:.3f})')
 
-def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes, custom_threshold=None):
+def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes, custom_threshold=None, pre_calculated_accuracy=None):
     """Plot paths with shared U-axis, first class up, others down, with endpoint projections."""
     # Pre-allocate arrays for better performance
     all_segments = []
@@ -561,13 +719,16 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                   edgecolor='black', linewidth=0.5)
     
     # Find optimal separation and draw separation line
-    threshold, accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold)
+    threshold, calculated_accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold)
+    
+    # Use pre-calculated accuracy if provided, otherwise use the calculated one
+    accuracy_to_display = pre_calculated_accuracy if pre_calculated_accuracy is not None else calculated_accuracy
     
     # Draw separation line
     ax.axvline(x=threshold, color='yellow', linestyle='--', linewidth=1, alpha=0.8, zorder=5)
     
     # Display accuracy
-    accuracy_text = f"Accuracy: {accuracy:.3f}"
+    accuracy_text = f"Accuracy: {accuracy_to_display:.3f}"
     ax.text(0.02, 0.98, accuracy_text, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle="round,pad=0.3", 
             facecolor="white", alpha=0.8))
@@ -585,8 +746,12 @@ glc_predictions, glc_cm, glc_threshold = generate_predictions_and_confusion_matr
 
 # GAC-L predictions and confusion matrix
 gac_predictions, gac_cm, gac_threshold = generate_predictions_and_confusion_matrix(
-    lambda x: gac_l_encoding(x, h=best_h), X_norm_sorted, y, unique_classes, best_threshold
+    lambda x: gac_l_encoding(x, h_per_attribute=best_h_per_attribute), X_norm_sorted, y, unique_classes, best_threshold
 )
+
+# Calculate accuracies from confusion matrices
+glc_accuracy = np.sum(np.diag(glc_cm)) / np.sum(glc_cm)
+gac_accuracy = np.sum(np.diag(gac_cm)) / np.sum(gac_cm)
 
 # Print confusion matrices
 print("\n" + "="*50)
@@ -595,11 +760,11 @@ print("="*50)
 
 print(f"\nGLC-L Confusion Matrix (Threshold: {glc_threshold:.3f}):")
 print(glc_cm)
-print(f"Accuracy: {np.sum(np.diag(glc_cm)) / np.sum(glc_cm):.3f}")
+print(f"Accuracy: {glc_accuracy:.3f}")
 
 print(f"\nGAC-L Confusion Matrix (Threshold: {gac_threshold:.3f}):")
 print(gac_cm)
-print(f"Accuracy: {np.sum(np.diag(gac_cm)) / np.sum(gac_cm):.3f}")
+print(f"Accuracy: {gac_accuracy:.3f}")
 
 # Print classification reports
 print("\n" + "="*50)
@@ -614,7 +779,7 @@ print(classification_report(y, gac_predictions, target_names=[str(c) for c in un
 
 # Create 1x2 subplot layout (just the visualizations)
 fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-titles = ['GLC-L (Length Encoding)', f'GAC-L (Angle Encoding, h={best_h:.2f})']
+titles = ['GLC-L (Length Encoding)', f'GAC-L (Angle Encoding)']
 
 # Create legend handles for all classes
 legend_handles = []
@@ -623,15 +788,15 @@ for i, class_label in enumerate(unique_classes):
     handle = plt.Line2D([], [], color=colors[color_idx], linewidth=2, label=str(class_label))
     legend_handles.append(handle)
 
-# Plot GLC-L visualization (left)
-plot_with_shared_u_axis(axes[0], glc_l_encoding, X_norm_sorted, y, colors, class_to_index, unique_classes)
+# Plot GLC-L visualization (left) - let it find its own optimal threshold
+plot_with_shared_u_axis(axes[0], glc_l_encoding, X_norm_sorted, y, colors, class_to_index, unique_classes, pre_calculated_accuracy=glc_accuracy)
 axes[0].set_title(titles[0] + "\n(Features sorted by LDA importance)")
 axes[0].axis('equal')
 axes[0].grid(True)
 axes[0].set_facecolor('lightgrey')
 
-# Plot GAC-L visualization (right)
-plot_with_shared_u_axis(axes[1], lambda x: gac_l_encoding(x, h=best_h), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold)
+# Plot GAC-L visualization (right) - use the optimized threshold from GAC-L optimization
+plot_with_shared_u_axis(axes[1], lambda x: gac_l_encoding(x, h_per_attribute=best_h_per_attribute), X_norm_sorted, y, colors, class_to_index, unique_classes, best_threshold, pre_calculated_accuracy=gac_accuracy)
 axes[1].set_title(titles[1] + "\n(Features sorted by LDA importance)")
 axes[1].axis('equal')
 axes[1].grid(True)
