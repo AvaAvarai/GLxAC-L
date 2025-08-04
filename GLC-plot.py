@@ -1154,7 +1154,10 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                     overlap_count += np.sum((distances < 0.05) & (np.arange(len(distances)) != i))
                     
                     # Adjust linewidth based on overlap count
-                    seg1['linewidth'] = min(0.5 + (overlap_count - 1) * 0.25, 2.0)  # Extra thin, cap at 2.0
+                    new_linewidth = min(0.5 + (overlap_count - 1) * 0.25, 2.0)  # Extra thin, cap at 2.0
+                    seg1['linewidth'] = new_linewidth
+                    # Adjust alpha to maintain consistent visual darkness when linewidth increases
+                    seg1['alpha'] = 0.6 / (new_linewidth / 0.5)  # Scale alpha inversely with linewidth
     
     # Batch plot all segments
     for segment in all_segments:
@@ -1163,6 +1166,21 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                 color=segment['color'], 
                 linewidth=segment['linewidth'],
                 alpha=segment['alpha'])
+    
+    # Draw tiny black dots at intersection vertices (end of each segment except the last one for each path)
+    # To avoid drawing a dot at the end of the last segment of each path, we need to know segment grouping.
+    # We'll assume that segments for each path are contiguous in all_segments, and that a new path starts after a segment whose 'end' is not the 'start' of the next segment.
+    prev_end = None
+    for i, segment in enumerate(all_segments):
+        # If this is the last segment, or the next segment starts a new path, skip drawing the dot
+        is_last_segment = (i == len(all_segments) - 1)
+        next_starts_new_path = (
+            not is_last_segment and not np.allclose(all_segments[i]['end'], all_segments[i+1]['start'])
+        )
+        if is_last_segment or next_starts_new_path:
+            continue
+        x_end, y_end = segment['end']
+        ax.scatter(x_end, y_end, color='black', s=1, alpha=0.8, zorder=10)
     
     # Find optimal separation and draw separation line
     threshold, calculated_accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold)
@@ -1218,22 +1236,22 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
         
         # Draw dotted line from endpoint to U-axis
         ax.plot([x_end, x_end], [y_end, 0], 
-               color=color, linestyle=':', alpha=0.6, linewidth=1)
+               color=color, linestyle=':', alpha=0.9, linewidth=1)
         
         # Draw colored dots with yellow outline for misclassified cases
         edge_color = 'yellow' if is_misclassified else 'black'
         edge_width = 0.5
          
         # Use higher zorder for misclassified cases to draw them on top
-        zorder_value = 15 if is_misclassified else 10
+        zorder_value = 20 if is_misclassified else 15
          
-        ax.scatter(x_end, y_end, color=color, s=8, alpha=0.6, zorder=zorder_value, 
+        ax.scatter(x_end, y_end, color=color, s=6, alpha=0.6, zorder=zorder_value, 
                    edgecolor=edge_color, linewidth=edge_width)
         ax.scatter(x_end, 0, color=color, s=6, alpha=0.6, zorder=zorder_value, 
                    edgecolor=edge_color, linewidth=edge_width)
     
     # Draw separation line
-    ax.axvline(x=threshold, color='yellow', linestyle='--', linewidth=1, alpha=0.8, zorder=5)
+    ax.axvline(x=threshold, color='yellow', linestyle='--', linewidth=1, alpha=0.8, zorder=25)
     
     # Display accuracy
     accuracy_text = f"Accuracy: {accuracy_to_display:.3f}"
