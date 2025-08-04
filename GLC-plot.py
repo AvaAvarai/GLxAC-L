@@ -1072,8 +1072,8 @@ print(f'Threshold: {glc_best_threshold:.3f} (accuracy={glc_best_acc:.3f})')
 def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_index, unique_classes, custom_threshold=None, pre_calculated_accuracy=None):
     """Plot paths with shared U-axis, first class up, others down, with endpoint projections."""
     # Pre-allocate arrays for better performance
-    all_segments = []
     final_endpoints = []
+    all_segments = []  # Keep for dot drawing
     
     # Vectorized path generation for all classes at once
     all_paths = []
@@ -1098,12 +1098,12 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
             all_class_labels.append(class_label)
             all_y_directions.append(y_direction)
     
-    # Collect all segments efficiently (including first segments)
+    # Collect all segments efficiently (including first segments) and plot them
     for i, path in enumerate(all_paths):
         class_label = all_class_labels[i]
         color = all_colors[i]
         
-        # Store segments for overlap detection (including first segment from origin)
+        # Store segments for dot drawing (including first segment from origin)
         for j in range(len(path)):
             if j == 0:
                 # First segment from origin to first point
@@ -1111,9 +1111,7 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                     'start': np.array([0, 0]),
                     'end': path[j],
                     'color': color,
-                    'class_label': class_label,
-                    'linewidth': 0.5,  # Extra thin by default
-                    'alpha': 0.6
+                    'class_label': class_label
                 }
             else:
                 # Subsequent segments
@@ -1121,66 +1119,41 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
                     'start': path[j-1],
                     'end': path[j],
                     'color': color,
-                    'class_label': class_label,
-                    'linewidth': 0.5,  # Extra thin by default
-                    'alpha': 0.6
+                    'class_label': class_label
                 }
             all_segments.append(segment)
+        
+        # Plot entire path at once for better performance
+        x_coords = [0] + [point[0] for point in path]
+        y_coords = [0] + [point[1] for point in path]
+        ax.plot(x_coords, y_coords, color=color, linewidth=0.5, alpha=0.6)
         
         # Store final endpoint for projection
         final_endpoints.append((path[-1], color, class_label))
     
-    # Optimized overlap detection using spatial indexing
-    if len(all_segments) > 0:
-        # Group segments by class for faster overlap detection
-        segments_by_class = {}
-        for segment in all_segments:
-            class_label = segment['class_label']
-            if class_label not in segments_by_class:
-                segments_by_class[class_label] = []
-            segments_by_class[class_label].append(segment)
-        
-        # Process overlaps by class (only same class overlaps)
-        for class_label, class_segments in segments_by_class.items():
-            if len(class_segments) > 1:
-                # Vectorized midpoint calculation
-                midpoints = np.array([(seg['start'] + seg['end']) / 2 for seg in class_segments])
-                
-                # Efficient overlap detection using broadcasting
-                for i, seg1 in enumerate(class_segments):
-                    overlap_count = 1
-                    # Calculate distances to all other segments efficiently
-                    distances = np.linalg.norm(midpoints - midpoints[i], axis=1)
-                    overlap_count += np.sum((distances < 0.05) & (np.arange(len(distances)) != i))
-                    
-                    # Adjust linewidth based on overlap count
-                    new_linewidth = min(0.5 + (overlap_count - 1) * 0.25, 2.0)  # Extra thin, cap at 2.0
-                    seg1['linewidth'] = new_linewidth
-                    # Adjust alpha to maintain consistent visual darkness when linewidth increases
-                    seg1['alpha'] = 0.6 / (new_linewidth / 0.5)  # Scale alpha inversely with linewidth
-    
-    # Batch plot all segments
-    for segment in all_segments:
-        ax.plot([segment['start'][0], segment['end'][0]], 
-                [segment['start'][1], segment['end'][1]], 
-                color=segment['color'], 
-                linewidth=segment['linewidth'],
-                alpha=segment['alpha'])
-    
     # Draw tiny black dots at intersection vertices (end of each segment except the last one for each path)
-    # To avoid drawing a dot at the end of the last segment of each path, we need to know segment grouping.
-    # We'll assume that segments for each path are contiguous in all_segments, and that a new path starts after a segment whose 'end' is not the 'start' of the next segment.
-    prev_end = None
+    # Track which segments belong to which path to avoid drawing dots at final endpoints
+    path_segments = []
+    current_path = []
+    current_path_start_idx = 0
+    
     for i, segment in enumerate(all_segments):
-        # If this is the last segment, or the next segment starts a new path, skip drawing the dot
+        current_path.append(segment)
+        
+        # Check if next segment starts a new path (different start point than current end point)
         is_last_segment = (i == len(all_segments) - 1)
-        next_starts_new_path = (
-            not is_last_segment and not np.allclose(all_segments[i]['end'], all_segments[i+1]['start'])
-        )
-        if is_last_segment or next_starts_new_path:
-            continue
-        x_end, y_end = segment['end']
-        ax.scatter(x_end, y_end, color='black', s=1, alpha=0.8, zorder=10)
+        if is_last_segment or (not is_last_segment and not np.allclose(segment['end'], all_segments[i+1]['start'])):
+            # End of current path - store it
+            path_segments.append((current_path_start_idx, i))
+            current_path = []
+            current_path_start_idx = i + 1
+    
+    # Draw dots at all segment endpoints except the final endpoint of each path
+    for start_idx, end_idx in path_segments:
+        for i in range(start_idx, end_idx):  # Don't include end_idx (final endpoint)
+            segment = all_segments[i]
+            x_end, y_end = segment['end']
+            ax.scatter(x_end, y_end, color='black', s=1, alpha=0.8, zorder=10)
     
     # Find optimal separation and draw separation line
     threshold, calculated_accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, custom_threshold)
@@ -1188,36 +1161,18 @@ def plot_with_shared_u_axis(ax, encoding_func, X_data, y_data, colors, class_to_
     # Use pre-calculated accuracy if provided, otherwise use the calculated one
     accuracy_to_display = pre_calculated_accuracy if pre_calculated_accuracy is not None else calculated_accuracy
     
-    # Determine predictions and identify misclassified cases
+    # Determine predictions and identify misclassified cases using vectorized operations
     u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
     class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
     
-    # Try both assignments to find the better one
-    correct1 = 0
-    correct2 = 0
-    pred1 = []
-    pred2 = []
+    # Vectorized prediction assignments
+    # Assignment 1: First class on left, second class on right
+    pred1 = np.where(u_positions < threshold, unique_classes[0], unique_classes[1])
+    correct1 = np.sum(class_labels == pred1)
     
-    for i, pos in enumerate(u_positions):
-        actual_class = class_labels[i]
-        
-        # Assignment 1: First class on left, second class on right
-        if pos < threshold:
-            predicted_class1 = unique_classes[0]
-        else:
-            predicted_class1 = unique_classes[1]
-        pred1.append(predicted_class1)
-        if actual_class == predicted_class1:
-            correct1 += 1
-        
-        # Assignment 2: First class on right, second class on left
-        if pos < threshold:
-            predicted_class2 = unique_classes[1]
-        else:
-            predicted_class2 = unique_classes[0]
-        pred2.append(predicted_class2)
-        if actual_class == predicted_class2:
-            correct2 += 1
+    # Assignment 2: First class on right, second class on left  
+    pred2 = np.where(u_positions < threshold, unique_classes[1], unique_classes[0])
+    correct2 = np.sum(class_labels == pred2)
     
     # Choose the better assignment
     if correct1 >= correct2:
