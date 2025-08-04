@@ -181,7 +181,7 @@ lda.fit(X_norm, y)
 
 # For binary classification, use the single discriminant axis
 lda_importance = np.abs(lda.coef_[0])
-sorted_indices = np.argsort(-lda_importance)  # descending order
+sorted_indices = np.argsort(lda_importance)  # ascending order
 
 # Reorder data and feature names
 X_norm_sorted = X_norm[:, sorted_indices]
@@ -464,8 +464,10 @@ def evaluate_strategy(h_per_attribute, X_data, y_data, unique_classes, class_to_
     def encoding_func(x):
         vectors = []
         for i in range(len(x)):
-            vectors.append([h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
-                         h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+            # For GAC-L: angles are subtracted from 90 degrees
+            angle = (1 - x[i]) * np.pi / 2  # Convert from 90-x[i]*90 to radians
+            vectors.append([h_per_attribute[i] * np.cos(angle), 
+                         h_per_attribute[i] * np.sin(angle)])
         return np.cumsum(vectors, axis=0)
     
     # Collect endpoints
@@ -502,13 +504,15 @@ def search_based_optimization(X_data, y_data, unique_classes, class_to_index, co
             def scaled_encoding_per_attr(x):
                 vectors = []
                 for i in range(len(x)):
+                    # For GAC-L: angles are subtracted from 90 degrees
+                    angle = (1 - x[i]) * np.pi / 2  # Convert from 90-x[i]*90 to radians
                     if i == attr_idx:
                         # Use the current h value for this attribute
-                        vectors.append([h * np.cos(x[i] * np.pi / 2), h * np.sin(x[i] * np.pi / 2)])
+                        vectors.append([h * np.cos(angle), h * np.sin(angle)])
                     else:
                         # Use the best h found so far for other attributes
-                        vectors.append([best_h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
-                                     best_h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+                        vectors.append([best_h_per_attribute[i] * np.cos(angle), 
+                                     best_h_per_attribute[i] * np.sin(angle)])
                 return np.cumsum(vectors, axis=0)
             
             # Collect endpoints
@@ -569,8 +573,10 @@ def search_based_optimization(X_data, y_data, unique_classes, class_to_index, co
     def final_encoding(x):
         vectors = []
         for i in range(len(x)):
-            vectors.append([best_h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
-                         best_h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+            # For GAC-L: angles are subtracted from 90 degrees
+            angle = (1 - x[i]) * np.pi / 2  # Convert from 90-x[i]*90 to radians
+            vectors.append([best_h_per_attribute[i] * np.cos(angle), 
+                         best_h_per_attribute[i] * np.sin(angle)])
         return np.cumsum(vectors, axis=0)
     
     # Collect final endpoints
@@ -588,14 +594,16 @@ def search_based_optimization(X_data, y_data, unique_classes, class_to_index, co
     return best_h_per_attribute, best_threshold, best_acc
 
 def gac_l_encoding(x, h_per_attribute=None):
-    # x[i] in [0,1], angle = x[i] * 90 degrees = x[i] * (π/2) radians, scaled by h_per_attribute
+    # x[i] in [0,1], angle = (1-x[i]) * 90 degrees = (1-x[i]) * (π/2) radians, scaled by h_per_attribute
+    # For GAC-L: angles are subtracted from 90 degrees
     if h_per_attribute is None:
         h_per_attribute = np.ones(n_features)
     
     vectors = []
     for i in range(n_features):
-        vectors.append([h_per_attribute[i] * np.cos(x[i] * np.pi / 2), 
-                      h_per_attribute[i] * np.sin(x[i] * np.pi / 2)])
+        angle = (1 - x[i]) * np.pi / 2  # Convert from 90-x[i]*90 to radians
+        vectors.append([h_per_attribute[i] * np.cos(angle), 
+                      h_per_attribute[i] * np.sin(angle)])
     return np.cumsum(vectors, axis=0)
 
 def optimize_glc_l_angles(X_data, y_data, unique_classes, class_to_index, colors):
@@ -606,7 +614,8 @@ def optimize_glc_l_angles(X_data, y_data, unique_classes, class_to_index, colors
     strategies = {
         'lda_based': lda_importance / np.max(lda_importance),  # Original LDA-based angles
         'uniform': np.ones(n_features),  # Uniform angles (all 45 degrees)
-        'search_based': np.ones(n_features)  # Will be filled by search
+        'search_based': np.ones(n_features),  # Will be filled by search
+        'ascending_tweak': np.ones(n_features)  # Will be filled by ascending order tweaking
     }
     
     best_strategy = 'lda_based'
@@ -647,11 +656,23 @@ def optimize_glc_l_angles(X_data, y_data, unique_classes, class_to_index, colors
         best_threshold = search_threshold
         best_strategy = 'search_based'
     
+    # Test ascending order tweaking optimization
+    print("Testing ascending order tweaking optimization...")
+    ascending_scaling, ascending_threshold, ascending_acc = ascending_order_tweak_optimization(X_data, y_data, unique_classes, class_to_index, colors)
+    print(f"  Ascending order tweaking accuracy: {ascending_acc:.3f}")
+    
+    if ascending_acc > best_acc:
+        best_acc = ascending_acc
+        best_angle_scaling = ascending_scaling
+        best_threshold = ascending_threshold
+        best_strategy = 'ascending_tweak'
+    
     print(f"\nBest GLC-L strategy: {best_strategy} (accuracy: {best_acc:.3f})")
     print(f"Strategy comparison:")
     print(f"  LDA-based: {lda_acc:.3f}")
     print(f"  Uniform: {uniform_acc:.3f}")
     print(f"  Search-based: {search_acc:.3f}")
+    print(f"  Ascending tweak: {ascending_acc:.3f}")
     
     return best_angle_scaling, best_threshold, best_acc
 
@@ -801,6 +822,180 @@ def search_based_glc_optimization(X_data, y_data, unique_classes, class_to_index
     
     # Find final threshold and accuracy
     best_threshold, best_acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+    
+    return best_angle_scaling, best_threshold, best_acc
+
+def ascending_order_tweak_optimization(X_data, y_data, unique_classes, class_to_index, colors):
+    """Perform sequential greedy search starting with LDA coefficients and tweaking them in ascending order."""
+    n_features = X_data.shape[1]
+    
+    # Start with normalized LDA coefficients (same as LDA-based strategy)
+    initial_scaling = lda_importance / np.max(lda_importance)
+    
+    best_angle_scaling = initial_scaling.copy()
+    best_threshold = None
+    best_acc = 0.0
+    
+    print(f"  Starting with normalized LDA coefficients...")
+    print(f"  Initial LDA coefficients: {lda_importance}")
+    print(f"  Initial scaling factors: {initial_scaling}")
+    
+    # Evaluate initial configuration
+    def evaluate_ascending_config(scaling_factors):
+        def glc_encoding_func(x):
+            k_i = lda_importance * scaling_factors
+            k_max = np.max(np.abs(k_i))
+            k_normalized = k_i / k_max
+            angles_from_k = np.arccos(np.abs(k_normalized))
+            
+            glc_vectors = []
+            for i in range(n_features):
+                angle = angles_from_k[i]
+                length = x[i]
+                vector = [length * np.cos(angle), length * np.sin(angle)]
+                glc_vectors.append(vector)
+            
+            return np.cumsum(glc_vectors, axis=0)
+        
+        # Collect endpoints
+        final_endpoints = []
+        for class_label in unique_classes:
+            X_class = X_data[y_data == class_label]
+            color_idx = class_to_index[class_label]
+            for row in X_class:
+                path = glc_encoding_func(row)
+                final_endpoints.append((path[-1], colors[color_idx], class_label))
+        
+        # Find threshold and accuracy
+        threshold, accuracy = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+        return accuracy, threshold
+    
+    # Evaluate initial configuration
+    initial_acc, initial_threshold = evaluate_ascending_config(initial_scaling)
+    print(f"  Initial LDA-based accuracy: {initial_acc:.3f}")
+    
+    if initial_acc > best_acc:
+        best_acc = initial_acc
+        best_threshold = initial_threshold
+    
+    # Now use sequential greedy search starting from LDA coefficients in ascending order
+    print(f"  Using sequential greedy search starting from LDA coefficients in ascending order...")
+    
+    # Get indices sorted by LDA importance (ascending order - lowest to highest)
+    ascending_indices = np.argsort(lda_importance)  # ascending order
+    
+    scaling_values = np.linspace(0.1, 1.0, 20)  # Test different scaling factors
+    
+    # Optimize each feature's angle scaling individually in ascending order
+    for attr_idx in ascending_indices:
+        print(f"  Optimizing GLC-L angle for feature {attr_idx + 1}/{n_features} (LDA coeff: {lda_importance[attr_idx]:.3f})...")
+        
+        best_scaling_for_attr = 1.0
+        best_acc_for_attr = 0.0
+        
+        for scaling in scaling_values:
+            # Create encoding function that uses the current scaling for this feature
+            def scaled_glc_encoding_per_attr(x):
+                k_i = lda_importance.copy()
+                k_i[attr_idx] *= scaling  # Scale this feature's LDA coefficient
+                k_max = np.max(np.abs(k_i))
+                k_normalized = k_i / k_max
+                angles_from_k = np.arccos(np.abs(k_normalized))
+                
+                glc_vectors = []
+                for i in range(n_features):
+                    angle = angles_from_k[i]
+                    length = x[i]
+                    vector = [length * np.cos(angle), length * np.sin(angle)]
+                    glc_vectors.append(vector)
+                
+                return np.cumsum(glc_vectors, axis=0)
+            
+            # Collect endpoints
+            final_endpoints = []
+            for class_label in unique_classes:
+                X_class = X_data[y_data == class_label]
+                color_idx = class_to_index[class_label]
+                for row in X_class:
+                    path = scaled_glc_encoding_per_attr(row)
+                    final_endpoints.append((path[-1], colors[color_idx], class_label))
+            
+            # Get u_positions for threshold optimization
+            u_positions = np.array([endpoint[0] for endpoint, color, class_label in final_endpoints])
+            class_labels = np.array([class_label for endpoint, color, class_label in final_endpoints])
+            
+            # Try different threshold positions for binary classification
+            first_class_mask = (class_labels == unique_classes[0])
+            first_class_positions = u_positions[first_class_mask]
+            other_class_positions = u_positions[~first_class_mask]
+            
+            if len(first_class_positions) > 0 and len(other_class_positions) > 0:
+                # Find the range where optimal threshold lives
+                left_class_max = np.max(first_class_positions)
+                right_class_min = np.min(other_class_positions)
+                
+                # If classes overlap, use the full range
+                if left_class_max >= right_class_min:
+                    min_pos = min(np.min(first_class_positions), np.min(other_class_positions))
+                    max_pos = max(np.max(first_class_positions), np.max(other_class_positions))
+                    threshold_candidates = np.linspace(min_pos, max_pos, 10)
+                else:
+                    # Use the non-overlapping range with some margin
+                    margin = (right_class_min - left_class_max) * 0.1
+                    threshold_candidates = np.linspace(left_class_max + margin, right_class_min - margin, 10)
+            else:
+                threshold_candidates = [np.mean(u_positions)]
+            
+            # Find best threshold for this scaling value
+            best_threshold_for_scaling = None
+            best_acc_for_scaling = 0.0
+            
+            for threshold in threshold_candidates:
+                _, acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes, threshold)
+                if acc > best_acc_for_scaling:
+                    best_acc_for_scaling = acc
+                    best_threshold_for_scaling = threshold
+            
+            # Update best scaling for this attribute if it gives better accuracy
+            if best_acc_for_scaling > best_acc_for_attr:
+                best_acc_for_attr = best_acc_for_scaling
+                best_scaling_for_attr = scaling
+        
+        # Update the best scaling for this attribute
+        best_angle_scaling[attr_idx] = best_scaling_for_attr
+        print(f"    Best scaling for feature {attr_idx + 1}: {best_scaling_for_attr:.3f} (accuracy: {best_acc_for_attr:.3f})")
+    
+    # Final evaluation with all optimized scaling values
+    def final_glc_encoding(x):
+        k_i = lda_importance * best_angle_scaling
+        k_max = np.max(np.abs(k_i))
+        k_normalized = k_i / k_max
+        angles_from_k = np.arccos(np.abs(k_normalized))
+        
+        glc_vectors = []
+        for i in range(n_features):
+            angle = angles_from_k[i]
+            length = x[i]
+            vector = [length * np.cos(angle), length * np.sin(angle)]
+            glc_vectors.append(vector)
+        
+        return np.cumsum(glc_vectors, axis=0)
+    
+    # Collect final endpoints
+    final_endpoints = []
+    for class_label in unique_classes:
+        X_class = X_data[y_data == class_label]
+        color_idx = class_to_index[class_label]
+        for row in X_class:
+            path = final_glc_encoding(row)
+            final_endpoints.append((path[-1], colors[color_idx], class_label))
+    
+    # Find final threshold and accuracy
+    best_threshold, best_acc = find_optimal_separation_and_accuracy(final_endpoints, unique_classes)
+    
+    print(f"  Final sequential greedy search accuracy: {best_acc:.3f}")
+    print(f"  Final scaling factors: {best_angle_scaling}")
+    print(f"  Original LDA coefficients: {lda_importance}")
     
     return best_angle_scaling, best_threshold, best_acc
 
